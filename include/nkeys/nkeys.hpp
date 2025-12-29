@@ -1,0 +1,134 @@
+#pragma once
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include "nkeys/nkeys_constants.hpp"
+
+namespace nkeys {
+
+    /// Key prefix types for NATS authentication.
+    /// Pre-shifted so Base32's first char is human-friendly (A/U/N/C/O/P/S).
+    enum class Prefix : std::uint8_t {
+        Seed     = 18u << 3, // 'S' - Seed key prefix
+        Private  = 15u << 3, // 'P' - Private key prefix
+        Operator = 14u << 3, // 'O' - Operator key type
+        Server   = 13u << 3, // 'N' - Server key type
+        Cluster  = 2u << 3,  // 'C' - Cluster key type
+        Account  = 0u << 3,  // 'A' - Account key type
+        User     = 20u << 3, // 'U' - User key type
+    };
+
+    /// Ed25519 key pair with signing and verification capabilities.
+    /// Contains both private (seed, secret key) and public key material.
+    class KeyPair {
+    public:
+        using Seed         = std::array<std::uint8_t, ED25519_SEED_SIZE>;
+        using SecretKey    = std::array<std::uint8_t, ED25519_SECRET_KEY_SIZE>;
+        using PublicKey    = std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE>;
+        virtual ~KeyPair() = default;
+
+        /// Returns the 32-byte Ed25519 seed.
+        [[nodiscard]] virtual const Seed&      seed() const noexcept = 0;
+        /// Returns the 64-byte Ed25519 secret key.
+        [[nodiscard]] virtual const SecretKey& secretKey() const noexcept = 0;
+        /// Returns the 32-byte Ed25519 public key.
+        [[nodiscard]] virtual const PublicKey& publicKey() const noexcept = 0;
+        /// Returns the key type prefix (User, Account, Server, etc.).
+        [[nodiscard]] virtual Prefix           prefix() const noexcept = 0;
+        /// Returns the Base32-encoded seed string (starts with 'S').
+        [[nodiscard]] virtual std::string      seedString() const = 0;
+        /// Returns the Base32-encoded public key string.
+        [[nodiscard]] virtual std::string      publicString() const = 0;
+        /// Signs a message and returns the 64-byte Ed25519 signature.
+        [[nodiscard]] virtual std::vector<uint8_t> sign(std::span<const uint8_t> msg) const = 0;
+        /// Verifies a signature against a message. Returns true if valid.
+        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const = 0;
+        /// Securely wipes all sensitive key material from memory.
+        virtual void wipe() = 0;
+    };
+
+    /// Creates a new User key pair with cryptographically secure random seed.
+    std::unique_ptr<KeyPair> CreateUser();
+    /// Creates a new Account key pair with cryptographically secure random seed.
+    std::unique_ptr<KeyPair> CreateAccount();
+    /// Creates a new Server key pair with cryptographically secure random seed.
+    std::unique_ptr<KeyPair> CreateServer();
+    /// Creates a new Cluster key pair with cryptographically secure random seed.
+    std::unique_ptr<KeyPair> CreateCluster();
+    /// Creates a new Operator key pair with cryptographically secure random seed.
+    std::unique_ptr<KeyPair> CreateOperator();
+
+    /// Creates a key pair from a raw 32-byte seed and specified prefix type.
+    std::unique_ptr<KeyPair> FromRawSeed(const std::array<std::uint8_t, ED25519_SEED_SIZE>& rawSeed,
+                                         Prefix                                             prefix);
+
+    /// Decodes a Base32-encoded seed string and creates a key pair.
+    std::unique_ptr<KeyPair> FromSeed(std::string_view b32);
+
+    /// Public key interface capable of verifying signatures (no private key material).
+    class Public {
+    public:
+        using PublicKey   = std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE>;
+        virtual ~Public() = default;
+        /// Returns the 32-byte Ed25519 public key.
+        [[nodiscard]] virtual const PublicKey& publicKey() const noexcept = 0;
+        /// Returns the key type prefix (User, Account, Server, etc.).
+        [[nodiscard]] virtual Prefix           prefix() const noexcept = 0;
+        /// Returns the Base32-encoded public key string.
+        [[nodiscard]] virtual std::string      publicString() const = 0;
+        /// Verifies a signature against a message. Returns true if valid.
+        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const = 0;
+        /// Securely wipes public key from memory.
+        virtual void wipe() = 0;
+    };
+
+    /// Decodes a Base32-encoded public key string and creates a Public instance.
+    std::unique_ptr<Public>  FromPublicKey(std::string_view b32);
+
+    /// Fills the output span with cryptographically secure random bytes.
+    /// Uses platform-specific secure RNG (arc4random_buf, /dev/urandom).
+    /// Throws std::runtime_error if secure RNG is unavailable.
+    void secureRandomBytes(std::span<std::uint8_t> out);
+
+    /// Checks if a prefix represents a public key type (User, Account, Server, Cluster, Operator).
+    inline bool isPublicPrefix(Prefix p) {
+        return p == Prefix::Server || p == Prefix::Operator || p == Prefix::Cluster ||
+               p == Prefix::Account || p == Prefix::User;
+    }
+
+    /// Checks if a prefix is valid (any of the defined prefix types).
+    inline bool validPrefix(Prefix p) {
+        return p == Prefix::Server || p == Prefix::Operator || p == Prefix::Cluster ||
+               p == Prefix::Account || p == Prefix::User ||
+               p == Prefix::Seed || p == Prefix::Private;
+    }
+
+    /// Base32 encoding/decoding with CRC16 validation for NATS keys.
+    namespace codec {
+        /// Encodes raw bytes with a prefix and CRC16 checksum to Base32.
+        /// Format: [1-byte prefix][payload][2-byte CRC16] → Base32
+        std::string Encode(Prefix                        prefix,
+                           std::span<const std::uint8_t> raw);
+
+        /// Encodes a seed with special 2-byte prefix and CRC16 checksum to Base32.
+        /// Format: [2-byte prefix (Seed + type)][32-byte seed][2-byte CRC16] → Base32
+        /// The prefix encodes both 'S' (Seed) and the key type (User, Account, etc.)
+        std::string EncodeSeed(Prefix                        prefix,
+                               std::span<const std::uint8_t> seed);
+
+        /// Result of decoding a Base32-encoded key.
+        struct Decoded {
+            Prefix                    prefix;  ///< Key type prefix
+            std::vector<std::uint8_t> payload; ///< Decoded payload (seed or public key)
+        };
+
+        /// Decodes a Base32-encoded key string, validates CRC16, and returns prefix + payload.
+        /// Throws std::invalid_argument if CRC validation fails or format is invalid.
+        Decoded Decode(std::string_view b32);
+    } // namespace codec
+
+} // namespace nkeys
