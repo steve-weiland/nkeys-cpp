@@ -129,9 +129,12 @@ if (BUILD_TESTING)
         # For MSVC: don't override runtime flags in gtest
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(googletest)
-        set(GTEST_LIBS GTest::gtest GTest::gtest_main)
+        # gmock too: the tests use gmock matchers (ContainerEq) — on macOS the
+        # system install co-locates the headers and this went unnoticed; the
+        # fetched build scopes them to the gmock target.
+        set(GTEST_LIBS GTest::gtest GTest::gtest_main GTest::gmock)
     else()
-        set(GTEST_LIBS GTest::GTest GTest::Main)
+        set(GTEST_LIBS GTest::GTest GTest::Main GTest::gmock)
     endif()
 
     add_executable(nkeys_test tests/nkeys_test.cpp)

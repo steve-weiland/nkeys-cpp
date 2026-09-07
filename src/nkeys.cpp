@@ -1,5 +1,6 @@
 #include "nkeys/nkeys.hpp"
 
+#include <algorithm> // std::copy_n — libc++ provides it transitively, libstdc++ does not
 #include <array>
 #include <cassert>
 #include <random>
@@ -7,6 +8,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#if defined(__linux__)
+#include <cerrno>
+#include <sys/random.h>
+#endif
 
 extern "C" {
 #include <monocypher/monocypher-ed25519.h>
@@ -135,7 +141,28 @@ namespace nkeys {
         arc4random_buf(out.data(), out.size());
         return;
 #elif defined(__linux__) || defined(__unix__)
-        // On Linux/Unix, use /dev/urandom with complete read validation
+#if defined(__linux__)
+        // Prefer getrandom(2): no file descriptor (works under fd exhaustion,
+        // chroot, and seccomp policies that allow it), and blocks only until
+        // the kernel entropy pool is initialized. Fall back to /dev/urandom
+        // only if the kernel predates it (ENOSYS).
+        {
+            size_t total = 0;
+            bool unsupported = false;
+            while (total < out.size()) {
+                const ssize_t n = ::getrandom(out.data() + total, out.size() - total, 0);
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == ENOSYS) { unsupported = true; break; }
+                    throw std::runtime_error("getrandom() failed for secure random bytes");
+                }
+                total += static_cast<size_t>(n);
+            }
+            if (!unsupported) return;
+        }
+#endif
+        // /dev/urandom with complete read validation (non-Linux unix, or
+        // Linux kernels without getrandom).
         FILE* f = std::fopen("/dev/urandom", "rb");
         if (!f) {
             throw std::runtime_error("Failed to open /dev/urandom for secure random bytes");
@@ -145,11 +172,12 @@ namespace nkeys {
         while (total_read < out.size()) {
             size_t n = std::fread(out.data() + total_read, 1, out.size() - total_read, f);
             if (n == 0) {
+                // Inspect the stream BEFORE closing it — the previous code
+                // called feof(f) after fclose(f): use-after-free of the FILE.
+                const bool hitEof = std::feof(f) != 0;
                 std::fclose(f);
-                if (feof(f)) {
-                    throw std::runtime_error("Unexpected EOF reading /dev/urandom");
-                }
-                throw std::runtime_error("Failed to read from /dev/urandom");
+                throw std::runtime_error(hitEof ? "Unexpected EOF reading /dev/urandom"
+                                                : "Failed to read from /dev/urandom");
             }
             total_read += n;
         }
