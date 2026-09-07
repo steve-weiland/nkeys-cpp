@@ -16,16 +16,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(GNUInstallDirs)
 
-# Helpful warnings (compiler-specific)
+# Helpful warnings (compiler-specific) — applied per-target to OUR code only.
+# A global add_compile_options also compiles fetched third-party sources
+# (GoogleTest) with -Werror, and a newer compiler's new warnings then break
+# the build inside code we don't own (seen live: AppleClang's
+# -Wcharacter-conversion firing in gtest-printers.h on the macOS CI runner).
 if (MSVC)
-    add_compile_options(/W4)
+    set(NKEYS_WARNING_FLAGS /W4)
     if (NKEYS_WARNINGS_AS_ERRORS)
-        add_compile_options(/WX)
+        list(APPEND NKEYS_WARNING_FLAGS /WX)
     endif()
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    set(NKEYS_WARNING_FLAGS -Wall -Wextra -Wpedantic)
     if (NKEYS_WARNINGS_AS_ERRORS)
-        add_compile_options(-Werror)
+        list(APPEND NKEYS_WARNING_FLAGS -Werror)
     endif()
 endif()
 
@@ -95,9 +99,11 @@ target_include_directories(nkeys PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/external
 )
+target_compile_options(nkeys PRIVATE ${NKEYS_WARNING_FLAGS})
 
 # --- Executable: nk++ ------------------------------------------------------
 add_executable(nk++ src/tools/nk-main.cpp)
+target_compile_options(nk++ PRIVATE ${NKEYS_WARNING_FLAGS})
 target_link_libraries(nk++ PRIVATE nkeys)
 target_include_directories(nk++ PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -138,6 +144,17 @@ if (BUILD_TESTING)
         # system install co-locates the headers and this went unnoticed; the
         # fetched build scopes them to the gmock target.
         set(GTEST_LIBS GTest::gtest GTest::gtest_main GTest::gmock)
+        # Treat fetched GTest headers as system includes in OUR TUs, so our
+        # -Werror doesn't fail on warnings inside gtest's inline functions.
+        foreach(_gt gtest gtest_main gmock gmock_main)
+            if (TARGET ${_gt})
+                get_target_property(_gt_inc ${_gt} INTERFACE_INCLUDE_DIRECTORIES)
+                if (_gt_inc)
+                    set_target_properties(${_gt} PROPERTIES
+                            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_gt_inc}")
+                endif()
+            endif()
+        endforeach()
     else()
         set(GTEST_LIBS GTest::GTest GTest::Main GTest::gmock)
     endif()
@@ -147,6 +164,7 @@ if (BUILD_TESTING)
     # them — CWD-relative lookup only worked for build dirs inside the repo.
     target_compile_definitions(nkeys_test PRIVATE
             NKEYS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    target_compile_options(nkeys_test PRIVATE ${NKEYS_WARNING_FLAGS})
     target_link_libraries(nkeys_test PRIVATE nkeys ${GTEST_LIBS} Threads::Threads)
     target_include_directories(nkeys_test PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -154,6 +172,7 @@ if (BUILD_TESTING)
     )
 
     add_executable(cmd_args_test tests/cmd_args_test.cpp)
+    target_compile_options(cmd_args_test PRIVATE ${NKEYS_WARNING_FLAGS})
     target_link_libraries(cmd_args_test PRIVATE ${GTEST_LIBS} Threads::Threads)
     target_include_directories(cmd_args_test PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
@@ -168,6 +187,7 @@ if (BUILD_TESTING)
     # matrix). Built with tests; the matrix itself needs a Go toolchain and
     # runs via the script / CI interop job, not ctest.
     add_executable(cpp_driver tests/interop/cpp_driver.cpp)
+    target_compile_options(cpp_driver PRIVATE ${NKEYS_WARNING_FLAGS})
     target_link_libraries(cpp_driver PRIVATE nkeys)
 endif()
 
