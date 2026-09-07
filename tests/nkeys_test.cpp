@@ -383,3 +383,26 @@ TEST(NKeysTest, FromSeedRejectsPublicKeyInput) {
         },
         std::invalid_argument);
 }
+
+// A malformed signature off the wire is an INVALID SIGNATURE, not an
+// argument error: verify must return false, never throw — throwing on
+// exactly the bytes an attacker controls hands them an exception path.
+// (Go returns its normal verification error for the same input.)
+TEST(NKeysTest, VerifyReturnsFalseOnMalformedSignature) {
+    const auto kp = nkeys::CreateUser();
+    const std::vector<uint8_t> msg = {'d', 'a', 't', 'a'};
+    const auto good = kp->sign(msg);
+
+    const std::vector<uint8_t> tooShort(good.begin(), good.begin() + 63);
+    const std::vector<uint8_t> empty;
+    std::vector<uint8_t> tooLong = good;
+    tooLong.push_back(0x00);
+
+    EXPECT_FALSE(kp->verify(msg, tooShort));
+    EXPECT_FALSE(kp->verify(msg, empty));
+    EXPECT_FALSE(kp->verify(msg, tooLong));
+
+    const auto pub = nkeys::FromPublicKey(kp->publicString());
+    EXPECT_FALSE(pub->verify(msg, tooShort));
+    EXPECT_TRUE(pub->verify(msg, good)) << "well-formed signatures still verify";
+}

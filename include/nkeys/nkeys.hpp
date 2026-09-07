@@ -45,8 +45,12 @@ namespace nkeys {
         [[nodiscard]] virtual std::string      publicString() const = 0;
         /// Signs a message and returns the 64-byte Ed25519 signature.
         [[nodiscard]] virtual std::vector<uint8_t> sign(std::span<const uint8_t> msg) const = 0;
-        /// Verifies a signature against a message. Returns true if valid.
-        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const = 0;
+        /// Verifies a signature against a message. Returns true iff valid.
+        /// A malformed signature (wrong length) is an invalid signature —
+        /// it returns false rather than throwing: the bytes come from the
+        /// wire, and throwing on attacker-controlled input is an exception
+        /// path handed to the attacker.
+        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const noexcept = 0;
         /// Securely wipes all sensitive key material from memory.
         virtual void wipe() = 0;
     };
@@ -80,8 +84,9 @@ namespace nkeys {
         [[nodiscard]] virtual Prefix           prefix() const noexcept = 0;
         /// Returns the Base32-encoded public key string.
         [[nodiscard]] virtual std::string      publicString() const = 0;
-        /// Verifies a signature against a message. Returns true if valid.
-        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const = 0;
+        /// Verifies a signature against a message. Returns true iff valid.
+        /// Malformed signatures return false; never throws (see KeyPair::verify).
+        [[nodiscard]] virtual bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const noexcept = 0;
         /// Securely wipes public key from memory.
         virtual void wipe() = 0;
     };

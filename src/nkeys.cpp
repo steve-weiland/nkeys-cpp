@@ -64,8 +64,8 @@ namespace nkeys {
             return sig;
         }
 
-        [[nodiscard]] bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const override {
-            if (sig.size() != ED25519_SIGNATURE_SIZE) throw std::invalid_argument("Invalid signature: must be 64 bytes");
+        [[nodiscard]] bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const noexcept override {
+            if (sig.size() != ED25519_SIGNATURE_SIZE) return false; // malformed = invalid, not an error
 
             const int ok = crypto_ed25519_check(sig.data(), pk_.data(), msg.data(), msg.size());
             return ok == 0;
@@ -100,8 +100,8 @@ namespace nkeys {
             return codec::Encode(prefix_, pk_);
         }
 
-        [[nodiscard]] bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const override {
-            if (sig.size() != ED25519_SIGNATURE_SIZE) throw std::invalid_argument("Invalid signature: must be 64 bytes");
+        [[nodiscard]] bool verify(std::span<const uint8_t> msg, std::span<const uint8_t> sig) const noexcept override {
+            if (sig.size() != ED25519_SIGNATURE_SIZE) return false; // malformed = invalid, not an error
             const int ok = crypto_ed25519_check(sig.data(), pk_.data(), msg.data(), msg.size());
             return ok == 0;
         }
