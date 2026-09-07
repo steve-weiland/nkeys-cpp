@@ -1,5 +1,7 @@
 # nkeys-cpp
 
+[![CI](https://github.com/steve-weiland/nkeys-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/steve-weiland/nkeys-cpp/actions/workflows/ci.yml)
+
 A C++20 implementation of the [NATS NKeys](https://github.com/nats-io/nkeys) cryptographic library for Ed25519-based authentication.
 
 ## Overview
@@ -352,7 +354,8 @@ nkeys-cpp/
 │   ├── nkeys_test.cpp     # Library tests
 │   ├── cmd_args_test.cpp  # Tool tests
 │   ├── fixtures/          # Test data
-│   └── interop/           # Go probe: source of all golden vectors
+│   └── interop/           # Live Go↔C++ matrix (run.sh) + the Go probe
+│                          #   that produced every golden vector
 ├── external/monocypher/   # Ed25519 / X25519 / Poly1305 primitives
 ├── CMakeLists.txt         # Build configuration
 └── README.md              # This file

@@ -1,0 +1,74 @@
+# CI — automates the gates this repo has been running by hand (see CLAUDE.md):
+#   test        build + full ctest on Linux (glibc) and macOS, warnings-as-errors
+#   alpine      the documented musl gate, verbatim — the first-ever Linux build
+#               found two shipped breakages, so glibc-green alone proves little
+#   sanitizers  ASAN + UBSAN over the full suite (fetched, instrumented GTest)
+#   interop     the live Go↔C++ matrix (tests/interop/run.sh): cross key
+#               derivation, sign/verify + seal/open in both directions,
+#               byte-identical fixed-nonce ciphertexts, decorated-creds parity
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNKEYS_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: nk++ smoke
+        run: ./build/nk++ --gen curve --pubout
+
+  alpine:
+    name: test (alpine musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test on alpine:3.20
+        run: |
+          docker run --rm -v "$PWD":/src:ro alpine:3.20 sh -c \
+            'apk add -q build-base cmake linux-headers && cp -r /src /w && cd /w && \
+             rm -rf build* cmake-build-* && cmake -S . -B b && cmake --build b -j && \
+             ctest --test-dir b --output-on-failure'
+
+  sanitizers:
+    name: ASAN + UBSAN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DNKEYS_ENABLE_ASAN=ON -DNKEYS_ENABLE_UBSAN=ON
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  interop:
+    name: Go interop matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tests/interop/probe/go.mod
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Run matrix
+        run: ./tests/interop/run.sh build

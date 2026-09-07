@@ -51,7 +51,9 @@ Options: `NKEYS_ENABLE_ASAN`, `NKEYS_ENABLE_UBSAN`, `NKEYS_ENABLE_HARDENING`
 (default ON), `NKEYS_WARNINGS_AS_ERRORS`, `NKEYS_USE_SYSTEM_GTEST` (default ON).
 Exceptions are required; there is no no-exceptions build.
 
-**Gates before claiming done**: full ctest on macOS AND a Linux container run —
+**Gates before claiming done** (CI runs all of these on every push —
+`.github/workflows/ci.yml` — but run them locally first; CI is the backstop,
+not the first execution): full ctest on macOS AND a Linux container run —
 the first-ever Linux build found two shipped breakages (missing `<algorithm>`,
 unlinked gmock), so macOS-only green proves little:
 
@@ -62,10 +64,18 @@ docker run --rm -v "$PWD":/src:ro alpine:3.20 sh -c \
    cmake --build b -j >/dev/null && ctest --test-dir b'
 ```
 
-For codec/interop changes, also run the Go cross-check — the probe is checked
-in at `tests/interop/` (pinned to upstream nkeys; add a `replace` directive to
-probe a local checkout): seed→pubkey both ways, signature verification in both
-directions, and seal/open in both directions for curve changes.
+For codec/interop changes, also run the live Go cross-check:
+`tests/interop/run.sh <build-dir>` — cross key derivation, sign/verify and
+seal/open in both directions, byte-identical fixed-nonce ciphertexts, and
+decorated-creds parity, driven through `cpp_driver` and the Go probe in
+`tests/interop/probe/` (pinned to upstream nkeys; add a `replace` directive to
+probe a local checkout).
+
+Out-of-tree builds are first-class: tests locate fixtures via the
+`NKEYS_TEST_FIXTURES_DIR` compile definition, not the CWD (a CWD-relative
+lookup shipped and broke the first `/tmp` build). Sanitizer configs refuse the
+system GTest — an uninstrumented GTest under ASAN reports a bogus
+container-overflow before any test runs.
 
 ## Working discipline
 
@@ -108,9 +118,9 @@ directions, and seal/open in both directions for curve changes.
 
 Feature parity with the Go library is complete (XKeys, decorated creds,
 `privateString`, `CreatePair`, validators — all landed 2026-09, Go-probe
-gated). Remaining are usability gaps, not parity gaps: CMake package config
-(`find_package(nkeys)`), CI (the macOS + Linux + probe gates above, automated),
-`BUILD_SHARED_LIBS`, a typed error taxonomy (everything throws
+gated), and CI automates every gate. Remaining are usability gaps, not parity
+gaps: CMake package config (`find_package(nkeys)`), `BUILD_SHARED_LIBS`, a
+typed error taxonomy (everything throws
 `std::invalid_argument`/`logic_error` today), and the Windows RNG backend.
 Port behavior from the Go source, verified by the probe, for anything that
 touches the wire.
