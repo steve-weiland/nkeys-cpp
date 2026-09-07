@@ -15,7 +15,7 @@ Thank you for your interest in contributing to nkeys-cpp! This document provides
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourorg/nkeys-cpp.git
+git clone https://github.com/steve-weiland/nkeys-cpp.git
 cd nkeys-cpp
 
 # Build with debug symbols and sanitizers

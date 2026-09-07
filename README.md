@@ -12,9 +12,9 @@ NKeys provides a secure, modern approach to authentication in distributed system
 - **Multiple Key Types**: Support for User, Account, Server, Cluster, and Operator keys
 - **Base32 Encoding**: Human-readable key representation with CRC16 validation
 - **Secure Memory Handling**: Automatic wiping of sensitive key material
-- **Cross-Platform**: Works on macOS, Linux, and Windows
+- **Cross-Platform**: macOS and Linux (both build- and test-verified); Windows pending a secure-RNG implementation (see SECURITY.md)
 - **Modern C++20**: Type-safe API with `std::span`, `std::unique_ptr`, and concepts
-- **Zero Dependencies**: Only requires C++20 standard library and CMake
+- **No External Dependencies**: C++20 standard library and CMake only — Monocypher is vendored in-tree
 
 ## Quick Start
 
@@ -54,7 +54,8 @@ int main() {
     bool valid = kp->verify(message, signature);
     std::cout << "Signature valid: " << (valid ? "yes" : "no") << "\n";
 
-    // Securely wipe keys from memory when done
+    // Key material is wiped automatically when the pair is destroyed.
+    // Call wipe() only to end its lifetime EARLY — the pair is unusable after.
     kp->wipe();
 
     return 0;
@@ -91,7 +92,7 @@ auto user     = nkeys::CreateUser();
 auto account  = nkeys::CreateAccount();
 auto server   = nkeys::CreateServer();
 auto cluster  = nkeys::CreateCluster();
-auto operator = nkeys::CreateOperator();
+auto oper     = nkeys::CreateOperator(); // ('operator' is a C++ keyword)
 
 // Load from seed string
 auto kp = nkeys::FromSeed("SUAAV...");
@@ -117,9 +118,11 @@ bool valid = pub->verify(msg, signature);
 
 ### Memory Security
 
+Key material is zeroed automatically when a `KeyPair` is destroyed. To end
+its lifetime early:
+
 ```cpp
-// Securely wipe sensitive key material
-kp->wipe();  // Zeros out seed, secret key, and public key in memory
+kp->wipe();  // zeros seed, secret key, and public key; the pair is unusable after
 ```
 
 ## Build Options
@@ -157,10 +160,10 @@ cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ## Security Considerations
 
 - **Seed Protection**: Seeds contain private key material and must be kept secret
-- **Memory Wiping**: Always call `wipe()` on key pairs when done to clear sensitive data
-- **Secure RNG**: Uses platform-specific secure random number generation (`arc4random_buf` on macOS/BSD, `/dev/urandom` on Linux)
+- **Memory Wiping**: automatic on destruction; `wipe()` ends the key material's lifetime early and marks the pair unusable
+- **Secure RNG**: platform-specific secure generation — `arc4random_buf` on macOS/BSD, `getrandom(2)` on Linux (with `/dev/urandom` fallback)
 - **Exception Safety**: All operations that generate keys use RAII guards to ensure memory is wiped even if exceptions occur
-- **Constant-Time Operations**: CRC validation uses lookup tables to prevent timing attacks
+- **Constant-Time Cryptography**: all secret-dependent operations are constant-time via Monocypher. (The CRC16 is an integrity check on encodings, not a security boundary.)
 
 See [SECURITY.md](SECURITY.md) for detailed security documentation.
 
@@ -178,11 +181,11 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Test suite includes:
-- 22 unit tests covering all API operations
-- Encoding/decoding validation
-- Cryptographic operation correctness
-- Security-focused tests (cross-type verification, bit flips, tampering detection)
+Test suite covers:
+- All public API operations, encoding/decoding, and error paths
+- Cryptographic correctness, including Go-measured decoder strictness
+- Security-focused cases (cross-type verification, bit flips, tampering,
+  use-after-wipe, malformed signatures, public-key-as-seed rejection)
 - Memory wiping verification
 
 ## Installation
@@ -269,9 +272,10 @@ sudo rm /usr/local/bin/nk++
 ## Requirements
 
 - **Compiler**: C++20 support required
-  - GCC 10+
-  - Clang 12+
-  - MSVC 19.29+ (Visual Studio 2019 16.10+)
+  - GCC 10+ (build/test-verified on GCC 13)
+  - Clang 12+ (build/test-verified on Apple Clang)
+  - MSVC 19.29+ should compile, but key **generation** throws until a
+    Windows secure-RNG backend lands (contributions welcome)
 - **CMake**: 3.20 or higher
 - **Dependencies**: None (Monocypher included, GoogleTest auto-fetched for tests)
 
@@ -302,7 +306,10 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 
 ## License
 
-This project is a port of the Go [NATS NKeys](https://github.com/nats-io/nkeys) library.
+Licensed under the [Apache License 2.0](LICENSE) — the same license as the
+Go [NATS NKeys](https://github.com/nats-io/nkeys) library this project is a
+port of. Vendored [Monocypher](https://monocypher.org/) is used under its
+BSD-2-Clause option (dual CC0/BSD-2); see [NOTICE](NOTICE).
 
 ## Acknowledgments
 

@@ -26,7 +26,9 @@ If you discover a security vulnerability, please report it privately:
 
 **Random Number Generation**
 - **macOS/BSD**: `arc4random_buf()` - cryptographically secure CSPRNG
-- **Linux**: `/dev/urandom` with complete read validation
+- **Linux**: `getrandom(2)` (no file descriptor; survives fd exhaustion,
+  chroot, seccomp), falling back to `/dev/urandom` with complete read
+  validation on kernels without it
 - **Windows**: Not currently supported (contributions welcome)
 - Fallback: **None** - throws exception if secure RNG unavailable
 
@@ -36,10 +38,15 @@ If you discover a security vulnerability, please report it privately:
 
 The library implements multiple layers of protection for sensitive key material:
 
-1. **Automatic Wiping**: RAII guards ensure keys are wiped even on exceptions
-2. **Explicit Wiping**: `wipe()` method zeros all sensitive data
-3. **Volatile Pointers**: Prevents compiler optimization from removing wipe operations
-4. **No Swap**: Sensitive data kept in process memory (not swapped to disk)
+1. **Automatic Wiping**: key material is zeroed when a `KeyPair` is destroyed,
+   and RAII guards wipe creation-path temporaries even on exceptions
+2. **Explicit Wiping**: `wipe()` ends the material's lifetime early; the pair
+   is unusable afterwards (signing throws)
+3. **Volatile Pointers**: prevents the compiler from optimizing away the zeroing
+
+Note: memory is **not** page-locked (`mlock`) — like the Go implementation,
+this library does not prevent key material from reaching swap. If that is in
+your threat model, run with encrypted swap or swap disabled.
 
 **Memory Zeroing Implementation**
 
@@ -57,10 +64,10 @@ The `volatile` qualifier ensures the compiler cannot optimize away the zeroing l
 
 ### Constant-Time Operations
 
-**CRC Validation**
-- Uses lookup table to ensure constant-time execution
-- Prevents timing attacks on checksum validation
-- No conditional branches based on data values
+All secret-dependent cryptographic operations (signing, verification,
+key derivation) are constant-time via Monocypher. The CRC16 on encoded
+keys is an **integrity check, not a security boundary** — it detects
+transcription errors, and no security property rests on its timing.
 
 ### Input Validation
 
@@ -70,7 +77,7 @@ All public APIs perform strict validation:
 - **Prefix types**: Validated against known key types
 - **CRC checksums**: Verified on all decoded keys
 - **Base32 encoding**: Validated character set
-- **Signature lengths**: Must be exactly 64 bytes
+- **Signature lengths**: a wrong-length signature verifies as `false` (never throws — the bytes come from the wire)
 
 Invalid input results in exceptions, never undefined behavior.
 

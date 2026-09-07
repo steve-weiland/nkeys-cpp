@@ -1,0 +1,10 @@
+nkeys-cpp
+Copyright 2026 Steve Weiland
+
+This product is a C++ port of the NATS NKeys library
+(https://github.com/nats-io/nkeys), Copyright The NATS Authors,
+licensed under the Apache License, Version 2.0.
+
+This product includes Monocypher (https://monocypher.org/), vendored under
+external/monocypher/, used under its BSD-2-Clause license option
+(Monocypher is dual-licensed CC0-1.0 / BSD-2-Clause).
