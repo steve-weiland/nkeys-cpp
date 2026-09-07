@@ -327,6 +327,129 @@ namespace nkeys {
         return std::make_unique<PublicImpl>(pk, prefix);
     }
 
+    // ---------------- Salsa20 core (vendored) ----------------
+    // Monocypher is ChaCha-family only, but Go's Seal/Open is NaCl box
+    // (XSalsa20-Poly1305), so the Salsa20 permutation lives here. Reference:
+    // Bernstein's salsa20/20 spec; validated byte-for-byte against Go's
+    // golang.org/x/crypto/nacl/box via the interop probe.
+    namespace salsa {
+
+        constexpr std::uint32_t rotl(std::uint32_t x, int c) noexcept {
+            return (x << c) | (x >> (32 - c));
+        }
+
+        inline std::uint32_t load32(const std::uint8_t* p) noexcept {
+            return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
+                   (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
+        }
+
+        inline void store32(std::uint8_t* p, std::uint32_t v) noexcept {
+            p[0] = static_cast<std::uint8_t>(v);
+            p[1] = static_cast<std::uint8_t>(v >> 8);
+            p[2] = static_cast<std::uint8_t>(v >> 16);
+            p[3] = static_cast<std::uint8_t>(v >> 24);
+        }
+
+        inline void quarter(std::uint32_t& a, std::uint32_t& b, std::uint32_t& c, std::uint32_t& d) noexcept {
+            b ^= rotl(a + d, 7);
+            c ^= rotl(b + a, 9);
+            d ^= rotl(c + b, 13);
+            a ^= rotl(d + c, 18);
+        }
+
+        // "expand 32-byte k"
+        constexpr std::uint32_t SIGMA[4] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574};
+
+        // State layout: sigma on the diagonal, key in 1..4 and 11..14,
+        // input words (nonce/counter for the stream, full 16 bytes for HSalsa20)
+        // in 6..9.
+        inline void initState(std::uint32_t x[16], const std::uint8_t key[32], const std::uint8_t in16[16]) noexcept {
+            x[0] = SIGMA[0];
+            for (int i = 0; i < 4; ++i) x[1 + i] = load32(key + 4 * i);
+            x[5] = SIGMA[1];
+            for (int i = 0; i < 4; ++i) x[6 + i] = load32(in16 + 4 * i);
+            x[10] = SIGMA[2];
+            for (int i = 0; i < 4; ++i) x[11 + i] = load32(key + 16 + 4 * i);
+            x[15] = SIGMA[3];
+        }
+
+        inline void rounds20(std::uint32_t x[16]) noexcept {
+            for (int i = 0; i < 10; ++i) {
+                quarter(x[0], x[4], x[8], x[12]);   // column rounds
+                quarter(x[5], x[9], x[13], x[1]);
+                quarter(x[10], x[14], x[2], x[6]);
+                quarter(x[15], x[3], x[7], x[11]);
+                quarter(x[0], x[1], x[2], x[3]);    // row rounds
+                quarter(x[5], x[6], x[7], x[4]);
+                quarter(x[10], x[11], x[8], x[9]);
+                quarter(x[15], x[12], x[13], x[14]);
+            }
+        }
+
+        // One 64-byte keystream block: rounds + feed-forward addition.
+        inline void block(std::uint8_t out[64], const std::uint8_t key[32],
+                          const std::uint8_t nonce8[8], std::uint64_t counter) noexcept {
+            std::uint8_t in16[16];
+            std::copy_n(nonce8, 8, in16);
+            store32(in16 + 8, static_cast<std::uint32_t>(counter));
+            store32(in16 + 12, static_cast<std::uint32_t>(counter >> 32));
+            std::uint32_t x[16], init[16];
+            initState(x, key, in16);
+            std::copy_n(x, 16, init);
+            rounds20(x);
+            for (int i = 0; i < 16; ++i) store32(out + 4 * i, x[i] + init[i]);
+            secureZero(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(x), sizeof x));
+            secureZero(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(init), sizeof init));
+        }
+
+        // HSalsa20: rounds WITHOUT feed-forward; output words 0,5,10,15,6,7,8,9.
+        inline void hsalsa20(std::uint8_t out[32], const std::uint8_t key[32], const std::uint8_t in16[16]) noexcept {
+            std::uint32_t x[16];
+            initState(x, key, in16);
+            rounds20(x);
+            constexpr int idx[8] = {0, 5, 10, 15, 6, 7, 8, 9};
+            for (int i = 0; i < 8; ++i) store32(out + 4 * i, x[idx[i]]);
+            secureZero(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(x), sizeof x));
+        }
+
+        // XSalsa20 keystream XORed into dst (= src for in-place). NaCl secretbox
+        // convention: block 0's first 32 bytes become the Poly1305 key, so the
+        // message stream starts at byte 32 of block 0.
+        struct Stream {
+            std::uint8_t subkey[32];
+            std::uint8_t nonce8[8];
+
+            Stream(const std::uint8_t key[32], const std::uint8_t nonce24[24]) noexcept {
+                hsalsa20(subkey, key, nonce24);
+                std::copy_n(nonce24 + 16, 8, nonce8);
+            }
+            ~Stream() {
+                secureZero(std::span<std::uint8_t>(subkey, sizeof subkey));
+            }
+
+            // Fills polyKey from block 0, then XORs src into dst using the
+            // rest of the keystream.
+            void xorWithPolyKey(std::uint8_t polyKey[32], std::uint8_t* dst,
+                                const std::uint8_t* src, std::size_t len) noexcept {
+                std::uint8_t ks[64];
+                block(ks, subkey, nonce8, 0);
+                std::copy_n(ks, 32, polyKey);
+                const std::size_t first = len < 32 ? len : 32;
+                for (std::size_t i = 0; i < first; ++i) dst[i] = src[i] ^ ks[32 + i];
+                std::size_t off = first;
+                std::uint64_t counter = 1;
+                while (off < len) {
+                    block(ks, subkey, nonce8, counter++);
+                    const std::size_t n = (len - off) < 64 ? (len - off) : 64;
+                    for (std::size_t i = 0; i < n; ++i) dst[off + i] = src[off + i] ^ ks[i];
+                    off += n;
+                }
+                secureZero(std::span<std::uint8_t>(ks, sizeof ks));
+            }
+        };
+
+    } // namespace salsa
+
     // ---------------- Curve (x25519) key pairs ----------------
 
     class CurveKeyPairImpl final : public CurveKeyPair {
@@ -359,10 +482,97 @@ namespace nkeys {
             wiped_ = true;
         }
 
+        [[nodiscard]] std::vector<std::uint8_t> seal(std::span<const std::uint8_t> input,
+                                                     std::string_view recipientPublicKey) const override {
+            Nonce nonce{};
+            secureRandomBytes(nonce);
+            return sealWithNonce(input, recipientPublicKey, nonce);
+        }
+
+        [[nodiscard]] std::vector<std::uint8_t> sealWithNonce(std::span<const std::uint8_t> input,
+                                                              std::string_view recipientPublicKey,
+                                                              const Nonce& nonce) const override {
+            requireLive();
+            const auto rpub = decodeCurvePublic(recipientPublicKey, "Invalid recipient: expected an 'X…' curve public key");
+
+            // "xkv1" || nonce || tag || ciphertext (Go's wire format)
+            std::vector<std::uint8_t> out(CURVE_VERSION_SIZE + CURVE_NONCE_SIZE + CURVE_TAG_SIZE + input.size());
+            std::copy_n(reinterpret_cast<const std::uint8_t*>(XKEY_VERSION_V1), CURVE_VERSION_SIZE, out.begin());
+            std::copy_n(nonce.begin(), CURVE_NONCE_SIZE, out.begin() + CURVE_VERSION_SIZE);
+
+            std::uint8_t shared[32], polyKey[32];
+            SecureGuard<std::uint8_t[32]> g1(shared), g2(polyKey);
+            boxSharedKey(shared, rpub);
+
+            salsa::Stream stream(shared, nonce.data());
+            std::uint8_t* tag = out.data() + CURVE_VERSION_SIZE + CURVE_NONCE_SIZE;
+            std::uint8_t* ct  = tag + CURVE_TAG_SIZE;
+            stream.xorWithPolyKey(polyKey, ct, input.data(), input.size());
+            crypto_poly1305(tag, ct, input.size(), polyKey);
+            return out;
+        }
+
+        [[nodiscard]] std::vector<std::uint8_t> open(std::span<const std::uint8_t> input,
+                                                     std::string_view senderPublicKey) const override {
+            requireLive();
+            // Go: len(input) <= vlen+nonce → ErrInvalidEncrypted (checked before version)
+            if (input.size() <= CURVE_VERSION_SIZE + CURVE_NONCE_SIZE)
+                throw std::invalid_argument("Invalid encrypted data: too short");
+            if (!std::equal(input.begin(), input.begin() + CURVE_VERSION_SIZE,
+                            reinterpret_cast<const std::uint8_t*>(XKEY_VERSION_V1)))
+                throw std::invalid_argument("Invalid encryption version: expected xkv1");
+            if (input.size() < CURVE_VERSION_SIZE + CURVE_NONCE_SIZE + CURVE_TAG_SIZE)
+                throw std::invalid_argument("Invalid encrypted data: missing authentication tag");
+            const auto spub = decodeCurvePublic(senderPublicKey, "Invalid sender: expected an 'X…' curve public key");
+
+            const std::uint8_t* nonce = input.data() + CURVE_VERSION_SIZE;
+            const std::uint8_t* tag   = nonce + CURVE_NONCE_SIZE;
+            const std::uint8_t* ct    = tag + CURVE_TAG_SIZE;
+            const std::size_t ctLen   = input.size() - (CURVE_VERSION_SIZE + CURVE_NONCE_SIZE + CURVE_TAG_SIZE);
+
+            std::uint8_t shared[32], polyKey[32];
+            SecureGuard<std::uint8_t[32]> g1(shared), g2(polyKey);
+            boxSharedKey(shared, spub);
+
+            salsa::Stream stream(shared, nonce);
+            std::vector<std::uint8_t> plain(ctLen);
+            stream.xorWithPolyKey(polyKey, plain.data(), ct, ctLen);
+
+            std::uint8_t expected[16];
+            crypto_poly1305(expected, ct, ctLen, polyKey);
+            if (crypto_verify16(expected, tag) != 0) {
+                secureZero(plain);
+                throw std::invalid_argument("Could not decrypt: authentication failed");
+            }
+            return plain;
+        }
+
     private:
+        static constexpr const char* XKEY_VERSION_V1 = "xkv1";
+
         void requireLive() const {
             if (wiped_) throw std::logic_error("curve key pair has been wiped");
         }
+
+        static PublicKey decodeCurvePublic(std::string_view b32, const char* what) {
+            auto decoded = codec::Decode(b32);
+            if (decoded.isSeed || decoded.prefix != Prefix::Curve ||
+                decoded.payload.size() != ED25519_PUBLIC_KEY_SIZE)
+                throw std::invalid_argument(what);
+            PublicKey pk{};
+            std::copy_n(decoded.payload.begin(), pk.size(), pk.begin());
+            return pk;
+        }
+
+        // NaCl box precomputation: HSalsa20(X25519(seed, peer), zeros).
+        void boxSharedKey(std::uint8_t out[32], const PublicKey& peer) const {
+            std::uint8_t raw[32];
+            SecureGuard<std::uint8_t[32]> g(raw);
+            crypto_x25519(raw, seed_.data(), peer.data());
+            constexpr std::uint8_t zeros[16] = {};
+            salsa::hsalsa20(out, raw, zeros);
+        }
+
         Seed      seed_{};
         PublicKey pk_{};
         bool      wiped_{false};

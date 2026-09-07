@@ -123,6 +123,20 @@ namespace nkeys {
         /// Base32-encoded private key ("P…") — encodes the 32-byte curve seed
         /// (unlike Ed25519 pairs, whose 'P' string holds 64 bytes; Go quirk, matched).
         [[nodiscard]] virtual std::string privateString() const = 0;
+        using Nonce = std::array<std::uint8_t, CURVE_NONCE_SIZE>;
+        /// Encrypts input for the recipient ("X…") — NaCl box, byte-compatible
+        /// with Go nkeys Seal: "xkv1" || random nonce || Poly1305 tag || ciphertext.
+        [[nodiscard]] virtual std::vector<std::uint8_t> seal(std::span<const std::uint8_t> input,
+                                                             std::string_view recipientPublicKey) const = 0;
+        /// seal with a caller-supplied nonce — deterministic; for tests and
+        /// interop vectors (Go's SealWithRand). Never reuse a nonce per key pair.
+        [[nodiscard]] virtual std::vector<std::uint8_t> sealWithNonce(std::span<const std::uint8_t> input,
+                                                                      std::string_view recipientPublicKey,
+                                                                      const Nonce& nonce) const = 0;
+        /// Decrypts a sealed message from the sender ("X…"). Throws
+        /// std::invalid_argument on malformed input or authentication failure.
+        [[nodiscard]] virtual std::vector<std::uint8_t> open(std::span<const std::uint8_t> input,
+                                                             std::string_view senderPublicKey) const = 0;
         /// Zeroes key material and disables the pair (further use throws).
         virtual void wipe() = 0;
     };
