@@ -40,6 +40,15 @@ namespace nkeys {
         KeyPairImpl(const Seed& s, const SecretKey& sk, const PublicKey& pk, Prefix prefix)
             : seed_(s), sk_(sk), pk_(pk), prefix_(prefix) {}
 
+        // Wiping is automatic: destruction zeroes the key material whether or
+        // not the caller remembered wipe(). Explicit wipe() remains for ending
+        // the material's lifetime EARLY (and marks the pair unusable).
+        ~KeyPairImpl() override {
+            secureZero(seed_);
+            secureZero(sk_);
+            secureZero(pk_);
+        }
+
         [[nodiscard]] const Seed& seed() const noexcept override {
             return seed_;
         }
@@ -252,21 +261,28 @@ namespace nkeys {
             throw std::invalid_argument("Invalid prefix: must be a public key type (User, Account, ...)");
         KeyPair::PublicKey pk{};
         KeyPair::SecretKey sk = derive(rawSeed, pk);
+        // Wipe the stack copy of the secret key after the ctor copies it —
+        // createPair guards its locals the same way.
+        SecureGuard<KeyPair::SecretKey> skGuard(sk);
         return std::make_unique<KeyPairImpl>(rawSeed, sk, pk, prefix);
     }
 
     std::unique_ptr<KeyPair> FromSeed(std::string_view b32) {
-        const auto decoded = codec::Decode(b32);
+        auto decoded = codec::Decode(b32);
         // A public key of the right type also carries a 32-byte payload — only
         // the 'S…' seed form may reach key derivation (Go: "nkeys: invalid seed").
         if (!decoded.isSeed) throw std::invalid_argument("Invalid seed: not a seed string (expected 'S' prefix)");
         const auto& prefix = decoded.prefix;
-        const auto& payload = decoded.payload;
+        auto& payload = decoded.payload;
         if (payload.size() != ED25519_SEED_SIZE) throw std::invalid_argument("Invalid seed: must be 32 bytes");
 
         std::array<std::uint8_t, ED25519_SEED_SIZE> seed{};
+        SecureGuard<std::array<std::uint8_t, ED25519_SEED_SIZE>> seedGuard(seed);
         std::copy_n(payload.begin(), ED25519_SEED_SIZE, seed.begin());
-        return FromRawSeed(seed, prefix);
+        auto kp = FromRawSeed(seed, prefix);
+        // The decoded payload vector also holds the seed bytes — wipe it too.
+        secureZero(payload);
+        return kp;
     }
 
     std::unique_ptr<Public> FromPublicKey(std::string_view b32) {
