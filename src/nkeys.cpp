@@ -109,7 +109,7 @@ namespace nkeys {
 
     private:
         void requireLive() const {
-            if (wiped_) throw std::logic_error("key pair has been wiped");
+            if (wiped_) throw WipedKeyError("key pair has been wiped");
         }
 
         Seed      seed_{};
@@ -183,7 +183,7 @@ namespace nkeys {
                 if (n < 0) {
                     if (errno == EINTR) continue;
                     if (errno == ENOSYS) { unsupported = true; break; }
-                    throw std::runtime_error("getrandom() failed for secure random bytes");
+                    throw RandomnessError("getrandom() failed for secure random bytes");
                 }
                 total += static_cast<size_t>(n);
             }
@@ -194,7 +194,7 @@ namespace nkeys {
         // Linux kernels without getrandom).
         FILE* f = std::fopen("/dev/urandom", "rb");
         if (!f) {
-            throw std::runtime_error("Failed to open /dev/urandom for secure random bytes");
+            throw RandomnessError("Failed to open /dev/urandom for secure random bytes");
         }
 
         size_t total_read = 0;
@@ -205,7 +205,7 @@ namespace nkeys {
                 // called feof(f) after fclose(f): use-after-free of the FILE.
                 const bool hitEof = std::feof(f) != 0;
                 std::fclose(f);
-                throw std::runtime_error(hitEof ? "Unexpected EOF reading /dev/urandom"
+                throw RandomnessError(hitEof ? "Unexpected EOF reading /dev/urandom"
                                                 : "Failed to read from /dev/urandom");
             }
             total_read += n;
@@ -214,7 +214,7 @@ namespace nkeys {
         return;
 #else
         // No secure RNG available on this platform
-        throw std::runtime_error("Secure random number generation not available on this platform");
+        throw RandomnessError("Secure random number generation not available on this platform");
 #endif
     }
 
@@ -245,7 +245,7 @@ namespace nkeys {
 
     std::unique_ptr<KeyPair> CreatePair(Prefix prefix) {
         if (!isPublicPrefix(prefix))
-            throw std::invalid_argument(
+            throw InvalidKeyError(
                 "Invalid prefix: CreatePair takes a signing key type (User, Account, ...); "
                 "curve pairs have their own factory");
         return createPair(prefix);
@@ -275,7 +275,7 @@ namespace nkeys {
                                          Prefix                                             prefix) {
         // Fail here, at the mistake — not later inside seedString()'s encoder.
         if (!isPublicPrefix(prefix))
-            throw std::invalid_argument("Invalid prefix: must be a public key type (User, Account, ...)");
+            throw InvalidKeyError("Invalid prefix: must be a public key type (User, Account, ...)");
         KeyPair::PublicKey pk{};
         KeyPair::SecretKey sk = derive(rawSeed, pk);
         // Wipe the stack copy of the secret key after the ctor copies it —
@@ -288,12 +288,12 @@ namespace nkeys {
         auto decoded = codec::Decode(b32);
         // A public key of the right type also carries a 32-byte payload — only
         // the 'S…' seed form may reach key derivation (Go: "nkeys: invalid seed").
-        if (!decoded.isSeed) throw std::invalid_argument("Invalid seed: not a seed string (expected 'S' prefix)");
+        if (!decoded.isSeed) throw InvalidKeyError("Invalid seed: not a seed string (expected 'S' prefix)");
         if (decoded.prefix == Prefix::Curve)
-            throw std::invalid_argument("Curve ('SX…') seed: use FromCurveSeed — curve pairs encrypt, they don't sign");
+            throw InvalidKeyError("Curve ('SX…') seed: use FromCurveSeed — curve pairs encrypt, they don't sign");
         const auto& prefix = decoded.prefix;
         auto& payload = decoded.payload;
-        if (payload.size() != ED25519_SEED_SIZE) throw std::invalid_argument("Invalid seed: must be 32 bytes");
+        if (payload.size() != ED25519_SEED_SIZE) throw InvalidKeyError("Invalid seed: must be 32 bytes");
 
         std::array<std::uint8_t, ED25519_SEED_SIZE> seed{};
         SecureGuard<std::array<std::uint8_t, ED25519_SEED_SIZE>> seedGuard(seed);
@@ -306,20 +306,20 @@ namespace nkeys {
 
     std::unique_ptr<Public> FromPublicKey(std::string_view b32) {
         if (b32.size() != NKEYS_PUBLIC_KEY_ENCODED_SIZE) {
-            throw std::invalid_argument("Invalid encoded key: must be 56 characters");
+            throw InvalidKeyError("Invalid encoded key: must be 56 characters");
         }
         const auto decoded = codec::Decode(b32);
         if (decoded.isSeed) {
-            throw std::invalid_argument("Invalid public key: got a seed string");
+            throw InvalidKeyError("Invalid public key: got a seed string");
         }
         const auto& prefix = decoded.prefix;
         const auto& payload = decoded.payload;
         if (payload.size() != ED25519_PUBLIC_KEY_SIZE) {
-            throw std::invalid_argument("Invalid public key: must be 32 bytes");
+            throw InvalidKeyError("Invalid public key: must be 32 bytes");
         }
 
         if (!isPublicPrefix(prefix)) {
-            throw std::invalid_argument("Invalid prefix: not a public key type");
+            throw InvalidKeyError("Invalid prefix: not a public key type");
         }
 
         std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE> pk{};
@@ -517,12 +517,12 @@ namespace nkeys {
             requireLive();
             // Go: len(input) <= vlen+nonce → ErrInvalidEncrypted (checked before version)
             if (input.size() <= CURVE_VERSION_SIZE + CURVE_NONCE_SIZE)
-                throw std::invalid_argument("Invalid encrypted data: too short");
+                throw DecryptionError("Invalid encrypted data: too short");
             if (!std::equal(input.begin(), input.begin() + CURVE_VERSION_SIZE,
                             reinterpret_cast<const std::uint8_t*>(XKEY_VERSION_V1)))
-                throw std::invalid_argument("Invalid encryption version: expected xkv1");
+                throw DecryptionError("Invalid encryption version: expected xkv1");
             if (input.size() < CURVE_VERSION_SIZE + CURVE_NONCE_SIZE + CURVE_TAG_SIZE)
-                throw std::invalid_argument("Invalid encrypted data: missing authentication tag");
+                throw DecryptionError("Invalid encrypted data: missing authentication tag");
             const auto spub = decodeCurvePublic(senderPublicKey, "Invalid sender: expected an 'X…' curve public key");
 
             const std::uint8_t* nonce = input.data() + CURVE_VERSION_SIZE;
@@ -542,7 +542,7 @@ namespace nkeys {
             crypto_poly1305(expected, ct, ctLen, polyKey);
             if (crypto_verify16(expected, tag) != 0) {
                 secureZero(plain);
-                throw std::invalid_argument("Could not decrypt: authentication failed");
+                throw DecryptionError("Could not decrypt: authentication failed");
             }
             return plain;
         }
@@ -551,14 +551,14 @@ namespace nkeys {
         static constexpr const char* XKEY_VERSION_V1 = "xkv1";
 
         void requireLive() const {
-            if (wiped_) throw std::logic_error("curve key pair has been wiped");
+            if (wiped_) throw WipedKeyError("curve key pair has been wiped");
         }
 
         static PublicKey decodeCurvePublic(std::string_view b32, const char* what) {
             auto decoded = codec::Decode(b32);
             if (decoded.isSeed || decoded.prefix != Prefix::Curve ||
                 decoded.payload.size() != ED25519_PUBLIC_KEY_SIZE)
-                throw std::invalid_argument(what);
+                throw InvalidKeyError(what);
             PublicKey pk{};
             std::copy_n(decoded.payload.begin(), pk.size(), pk.begin());
             return pk;
@@ -588,9 +588,9 @@ namespace nkeys {
     std::unique_ptr<CurveKeyPair> FromCurveSeed(std::string_view b32) {
         auto decoded = codec::Decode(b32);
         if (!decoded.isSeed || decoded.prefix != Prefix::Curve)
-            throw std::invalid_argument("Invalid curve seed: expected an 'SX…' seed string");
+            throw InvalidKeyError("Invalid curve seed: expected an 'SX…' seed string");
         if (decoded.payload.size() != ED25519_SEED_SIZE)
-            throw std::invalid_argument("Invalid curve seed: must be 32 bytes");
+            throw InvalidKeyError("Invalid curve seed: must be 32 bytes");
         CurveKeyPair::Seed seed{};
         SecureGuard<CurveKeyPair::Seed> guard(seed);
         std::copy_n(decoded.payload.begin(), ED25519_SEED_SIZE, seed.begin());
@@ -674,10 +674,10 @@ namespace nkeys {
             secureZero({reinterpret_cast<std::uint8_t*>(seedLine.data()), seedLine.size()});
         };
         if (seedLine.empty())
-            throw std::invalid_argument("no nkey seed found");
+            throw CredsError("no nkey seed found");
         if (!startsWithSeedType(seedLine)) {
             wipeLine();
-            throw std::invalid_argument("doesn't contain a valid nkey seed");
+            throw CredsError("doesn't contain a valid nkey seed");
         }
         try {
             auto kp = FromSeed(seedLine);
@@ -692,7 +692,7 @@ namespace nkeys {
     std::unique_ptr<KeyPair> ParseDecoratedUserNKey(std::string_view contents) {
         auto kp = ParseDecoratedNKey(contents);
         if (kp->prefix() != Prefix::User)
-            throw std::invalid_argument("doesn't contain a user seed nkey");
+            throw CredsError("doesn't contain a user seed nkey");
         return kp;
     }
 
@@ -749,7 +749,7 @@ namespace nkeys {
                 // however, are ACCEPTED: Go decodes them to the same key.
                 int v = val(ch);
                 if (v < 0)
-                    throw std::invalid_argument("Invalid Base32 encoding: illegal character");
+                    throw InvalidKeyError("Invalid Base32 encoding: illegal character");
                 buffer = (buffer << 5) | v;
                 bitsLeft += 5;
                 if (bitsLeft >= 8) {
@@ -827,9 +827,9 @@ namespace nkeys {
 
     std::string codec::Encode(Prefix prefix, std::span<const std::uint8_t> raw) {
         if (!validPrefix(prefix))
-            throw std::invalid_argument("Invalid prefix: not a valid prefix type");
+            throw InvalidKeyError("Invalid prefix: not a valid prefix type");
         if (raw.empty())
-            throw std::invalid_argument("Invalid payload: cannot be empty");
+            throw InvalidKeyError("Invalid payload: cannot be empty");
         // Layout: [prefix(1)][payload][crc16 LE(2)]
         std::vector<std::uint8_t> buf;
         buf.reserve(1 + raw.size() + 2);
@@ -843,12 +843,12 @@ namespace nkeys {
 
     std::string codec::EncodeSeed(Prefix prefix, std::span<const std::uint8_t> seed32) {
         if (seed32.size() != ED25519_SEED_SIZE)
-            throw std::invalid_argument("Invalid seed: must be 32 bytes");
+            throw InvalidKeyError("Invalid seed: must be 32 bytes");
         // Seedable types are the signing publics PLUS Curve ("SX…") — Go's
         // EncodeSeed accepts curve too. isPublicPrefix stays curve-free on
         // purpose (Ed25519 verification must never see an X key).
         if (!isPublicPrefix(prefix) && prefix != Prefix::Curve)
-            throw std::invalid_argument("Invalid prefix: must be a seedable key type");
+            throw InvalidKeyError("Invalid prefix: must be a seedable key type");
 
         // We want Base32 chars:
         //   c0 = 'S' (value 18), c1 = public type ('U','A','N','C','O')
@@ -883,14 +883,14 @@ namespace nkeys {
     codec::Decoded codec::Decode(std::string_view b32) {
         auto raw = base32_decode(b32);
         if (raw.size() < 3)
-            throw std::invalid_argument("Invalid encoded key: too short");
+            throw InvalidKeyError("Invalid encoded key: too short");
 
         const std::size_t   n = raw.size() - 2;
         const std::uint16_t expect =
             static_cast<std::uint16_t>(raw[n]) | (static_cast<std::uint16_t>(raw[n + 1]) << 8);
         const std::uint16_t got = crc16_ccitt_xmodem(std::span<const std::uint8_t>(raw.data(), n));
         if (expect != got)
-            throw std::invalid_argument("Invalid encoded key: CRC checksum failed");
+            throw InvalidKeyError("Invalid encoded key: CRC checksum failed");
 
         // Seed path: first Base32 char must be 'S' – in our packed form that means
         // top5(raw[0]) == 18. The public type is carried in:
@@ -902,13 +902,13 @@ namespace nkeys {
 
         if (top5(raw[0]) == 18) { // 'S'
             if (raw.size() != 2 + ED25519_SEED_SIZE + 2)
-                throw std::invalid_argument("Invalid seed: wrong size");
+                throw InvalidKeyError("Invalid seed: wrong size");
             const auto vT = static_cast<uint8_t>((low3(raw[0]) << 2) | top2(raw[1])); // 0..31
             // Rebuild the public Prefix byte (= vT << 3)
             auto pub = static_cast<Prefix>(static_cast<uint8_t>(vT << 3));
             // sanity check: only allow seedable types (signing publics + Curve)
             if (!isPublicPrefix(pub) && pub != Prefix::Curve)
-                throw std::invalid_argument("Invalid prefix: not a valid seed key type");
+                throw InvalidKeyError("Invalid prefix: not a valid seed key type");
             std::vector<std::uint8_t> payload(raw.begin() + 2, raw.begin() + 2 + ED25519_SEED_SIZE);
             return {pub, std::move(payload), /*isSeed=*/true}; // payload = 32B seed
         }
@@ -917,7 +917,7 @@ namespace nkeys {
         const auto p = static_cast<Prefix>(raw[0]);
         // Validate that the prefix is a known valid value
         if (!validPrefix(p)) {
-            throw std::invalid_argument("Invalid prefix: unknown prefix byte");
+            throw InvalidKeyError("Invalid prefix: unknown prefix byte");
         }
         std::vector<std::uint8_t> payload(raw.begin() + 1, raw.begin() + n);
         return {p, std::move(payload), /*isSeed=*/false};

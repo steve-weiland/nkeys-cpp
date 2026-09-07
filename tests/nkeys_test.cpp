@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <fstream>
+#include <functional>
+#include <type_traits>
 #include <algorithm>
 #include <random>
 #include <regex>
@@ -712,4 +714,86 @@ TEST(XKeysSealTest, SealRejectsNonCurveRecipientAndOpenRejectsNonCurveSender) {
     EXPECT_THROW((void)a->seal(asBytes(kSealMsg), user->publicString()), std::exception);
     auto b = nkeys::FromCurveSeed(kSealSeedB);
     EXPECT_THROW((void)b->open(fromHex(kGoldenCipherHex), user->publicString()), std::exception);
+}
+
+// ---------------------------------------------------------------------------
+// Error taxonomy — every library failure is catchable as nkeys::Error
+// (distinguishing it from the standard library's own exceptions) AND as the
+// std exception it historically derived from, so pre-taxonomy catch sites
+// keep working. One test per category, plus the back-compat assertions.
+// ---------------------------------------------------------------------------
+
+static_assert(std::is_base_of_v<nkeys::Error, nkeys::InvalidKeyError>);
+static_assert(std::is_base_of_v<nkeys::Error, nkeys::DecryptionError>);
+static_assert(std::is_base_of_v<nkeys::Error, nkeys::CredsError>);
+static_assert(std::is_base_of_v<nkeys::Error, nkeys::RandomnessError>);
+static_assert(std::is_base_of_v<nkeys::Error, nkeys::WipedKeyError>);
+// Historical std bases (the back-compat contract, enforced at compile time)
+static_assert(std::is_base_of_v<std::invalid_argument, nkeys::InvalidKeyError>);
+static_assert(std::is_base_of_v<std::runtime_error, nkeys::DecryptionError>);
+static_assert(std::is_base_of_v<std::invalid_argument, nkeys::CredsError>);
+static_assert(std::is_base_of_v<std::runtime_error, nkeys::RandomnessError>);
+static_assert(std::is_base_of_v<std::logic_error, nkeys::WipedKeyError>);
+
+TEST(ErrorTaxonomyTest, MalformedKeysThrowInvalidKeyError) {
+    EXPECT_THROW((void)nkeys::FromSeed("garbage"), nkeys::InvalidKeyError);
+    EXPECT_THROW((void)nkeys::FromPublicKey("garbage"), nkeys::InvalidKeyError);
+    EXPECT_THROW((void)nkeys::FromCurveSeed(kSealPubA), nkeys::InvalidKeyError);
+    // A bad recipient/sender key is a KEY error, not a decryption error.
+    auto a = nkeys::FromCurveSeed(kSealSeedA);
+    auto user = nkeys::CreatePair(nkeys::Prefix::User);
+    EXPECT_THROW((void)a->seal(asBytes(kSealMsg), user->publicString()), nkeys::InvalidKeyError);
+    EXPECT_THROW((void)a->open(fromHex(kGoldenCipherHex), user->publicString()), nkeys::InvalidKeyError);
+}
+
+TEST(ErrorTaxonomyTest, UnopenablePayloadsThrowDecryptionError) {
+    auto b = nkeys::FromCurveSeed(kSealSeedB);
+    auto tampered = fromHex(kGoldenCipherHex);
+    tampered.back() ^= 0x01;
+    EXPECT_THROW((void)b->open(tampered, kSealPubA), nkeys::DecryptionError);
+    auto badVersion = fromHex(kGoldenCipherHex);
+    badVersion[0] = 'y';
+    EXPECT_THROW((void)b->open(badVersion, kSealPubA), nkeys::DecryptionError);
+    // The wrong pair fails AUTHENTICATION — same category, and the message
+    // reaches the catcher through the nkeys::Error base.
+    auto mallory = nkeys::CreateCurveKeys();
+    try {
+        (void)mallory->open(fromHex(kGoldenCipherHex), kSealPubA);
+        FAIL() << "open() must throw for the wrong recipient";
+    } catch (const nkeys::Error& e) {
+        EXPECT_THAT(e.what(), testing::HasSubstr("authentication"));
+    }
+}
+
+TEST(ErrorTaxonomyTest, CredsFailuresThrowCredsError) {
+    EXPECT_THROW((void)nkeys::ParseDecoratedNKey("nothing here\n"), nkeys::CredsError);
+    const auto accountCreds = readFixture("account.creds");
+    EXPECT_THROW((void)nkeys::ParseDecoratedUserNKey(accountCreds), nkeys::CredsError);
+}
+
+TEST(ErrorTaxonomyTest, WipedPairsThrowWipedKeyError) {
+    auto kp = nkeys::CreateUser();
+    kp->wipe();
+    EXPECT_THROW((void)kp->seedString(), nkeys::WipedKeyError);
+    auto ckp = nkeys::CreateCurveKeys();
+    ckp->wipe();
+    EXPECT_THROW((void)ckp->publicString(), nkeys::WipedKeyError);
+}
+
+TEST(ErrorTaxonomyTest, EveryCategoryIsCatchableAsError) {
+    const std::vector<std::function<void()>> throwers = {
+        [] { (void)nkeys::FromSeed("garbage"); },
+        [] { auto b = nkeys::FromCurveSeed(kSealSeedB);
+             (void)b->open(std::vector<std::uint8_t>(8, 0), kSealPubA); },
+        [] { (void)nkeys::ParseDecoratedNKey("nothing"); },
+        [] { auto kp = nkeys::CreateUser(); kp->wipe(); (void)kp->publicString(); },
+    };
+    for (const auto& t : throwers) {
+        try {
+            t();
+            FAIL() << "expected a throw";
+        } catch (const nkeys::Error& e) {
+            EXPECT_STRNE(e.what(), "") << "nkeys::Error must carry the message";
+        }
+    }
 }

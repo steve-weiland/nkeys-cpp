@@ -35,6 +35,11 @@ is NOT interoperable with NATS.
   material's lifetime early and disables the pair. `SecureGuard` covers stack
   temporaries and exception paths in creation/loading flows — anything that
   copies secret bytes into a local must guard or wipe that local.
+- **Throw only `nkeys::Error`-derived types** (`nkeys_errors.hpp`): callers
+  distinguish library failures from std exceptions, and each type also derives
+  from its historical std base so old catch sites keep working. New throw
+  sites pick the category (InvalidKey/Decryption/Creds/Randomness/WipedKey),
+  never a bare std exception.
 - **Docs state measured truth only** — no security claims the code doesn't
   implement (history: "no swap", "constant-time CRC", and "works on Windows"
   were all once claimed and all false).
@@ -120,11 +125,10 @@ Feature parity with the Go library is complete (XKeys, decorated creds,
 `privateString`, `CreatePair`, validators — all landed 2026-09, Go-probe
 gated), CI automates every gate, and the library is consumable four ways
 (find_package static/shared, pkg-config, add_subdirectory embed — all gated by
-`tests/packaging/test.sh`). Remaining: a typed error taxonomy (everything
-throws `std::invalid_argument`/`logic_error` today), hiding/documenting the
-Monocypher symbols exported from libnkeys (they collide if a consumer links
-Monocypher separately), and the Windows RNG backend (a build-only MSVC CI leg
-is possible before that lands).
+`tests/packaging/test.sh`), and every throw is typed (`nkeys::Error`
+hierarchy). Remaining: hiding/documenting the Monocypher symbols exported from
+libnkeys (they collide if a consumer links Monocypher separately), and the
+Windows RNG backend (a build-only MSVC CI leg is possible before that lands).
 Port behavior from the Go source, verified by the probe, for anything that
 touches the wire.
 

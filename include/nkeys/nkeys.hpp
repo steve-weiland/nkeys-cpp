@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "nkeys/nkeys_constants.hpp"
+#include "nkeys/nkeys_errors.hpp"
 
 namespace nkeys {
 
@@ -72,7 +73,7 @@ namespace nkeys {
     std::unique_ptr<KeyPair> CreateOperator();
 
     /// Creates a new key pair of the given public type (User, Account, Server,
-    /// Cluster, Operator). Throws std::invalid_argument for any other prefix —
+    /// Cluster, Operator). Throws InvalidKeyError for any other prefix —
     /// curve (x25519) pairs are a different type with their own factory.
     std::unique_ptr<KeyPair> CreatePair(Prefix prefix);
 
@@ -134,7 +135,8 @@ namespace nkeys {
                                                                       std::string_view recipientPublicKey,
                                                                       const Nonce& nonce) const = 0;
         /// Decrypts a sealed message from the sender ("X…"). Throws
-        /// std::invalid_argument on malformed input or authentication failure.
+        /// DecryptionError on malformed input or authentication failure
+        /// (a bad sender KEY throws InvalidKeyError instead).
         [[nodiscard]] virtual std::vector<std::uint8_t> open(std::span<const std::uint8_t> input,
                                                              std::string_view senderPublicKey) const = 0;
         /// Zeroes key material and disables the pair (further use throws).
@@ -161,7 +163,7 @@ namespace nkeys {
 
     /// Finds the NKey seed in a decorated creds file (second armored block),
     /// or falls back to scanning lines for an SO/SA/SU seed, and returns the
-    /// key pair. Throws std::invalid_argument when no seed is found or the
+    /// key pair. Throws CredsError when no seed is found or the
     /// candidate is not a valid operator/account/user seed. Matches Go's
     /// line-scan quirk: an indented unarmored seed line is an error.
     std::unique_ptr<KeyPair> ParseDecoratedNKey(std::string_view contents);
@@ -171,7 +173,7 @@ namespace nkeys {
 
     /// Fills the output span with cryptographically secure random bytes.
     /// Uses platform-specific secure RNG (arc4random_buf, /dev/urandom).
-    /// Throws std::runtime_error if secure RNG is unavailable.
+    /// Throws RandomnessError if secure RNG is unavailable.
     void secureRandomBytes(std::span<std::uint8_t> out);
 
     /// Checks if a prefix represents an Ed25519 SIGNING public key type

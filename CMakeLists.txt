@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)  # PROJECT_IS_TOP_LEVEL
 
 # Project — the VERSION here is the single source of truth: it feeds the
 # package config version file, the pkg-config file, and nk++ --v.
-project(nkeys-cpp VERSION 1.0.0 LANGUAGES C CXX)
+project(nkeys-cpp VERSION 1.1.0 LANGUAGES C CXX)
 
 # --- Options ---------------------------------------------------------------
 # Tests, the CLI, and install rules default off when this project is embedded
@@ -225,6 +225,7 @@ if (NKEYS_INSTALL)
     install(FILES
             ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys.hpp
             ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys_constants.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys_errors.hpp
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nkeys
     )
 

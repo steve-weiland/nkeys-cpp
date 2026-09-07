@@ -172,6 +172,35 @@ nkeys::IsValidPublicKey(s);         // any public type
 nkeys::IsValidPublicUserKey(s);     // plus Account/Server/Cluster/Operator/Curve variants
 ```
 
+### Error Handling
+
+Every failure the library throws derives from `nkeys::Error` (in
+`<nkeys/nkeys_errors.hpp>`, included by the main header), so library errors
+are distinguishable from the standard library's own exceptions — and each
+concrete type ALSO derives from the std exception it historically was, so
+existing `catch (std::invalid_argument)` code keeps working.
+
+```cpp
+try {
+    auto kp = nkeys::FromSeed(userInput);
+} catch (const nkeys::InvalidKeyError& e) {
+    // malformed key/seed/encoding, or the wrong kind of key
+} catch (const nkeys::Error& e) {
+    // any other nkeys failure; e.what() carries the message
+}
+```
+
+| type | std base | thrown for |
+|---|---|---|
+| `InvalidKeyError` | `std::invalid_argument` | malformed or wrong-type keys, seeds, encodings |
+| `DecryptionError` | `std::runtime_error` | `open()`: bad wire format/version, failed authentication |
+| `CredsError` | `std::invalid_argument` | `.creds` parsing: no seed found / wrong seed type |
+| `RandomnessError` | `std::runtime_error` | secure RNG unavailable or failed |
+| `WipedKeyError` | `std::logic_error` | key pair used after `wipe()` |
+
+`verify()` never throws — malformed signatures return `false` (wire data is
+attacker-controlled; an exception path would be handed to the attacker).
+
 ### Memory Security
 
 Key material is zeroed automatically when a `KeyPair` is destroyed. To end
