@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <random>
+#include <regex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -321,6 +322,104 @@ namespace nkeys {
         std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE> pk{};
         std::copy_n(payload.begin(), ED25519_PUBLIC_KEY_SIZE, pk.begin());
         return std::make_unique<PublicImpl>(pk, prefix);
+    }
+
+    // ---------------- Decorated creds parsing (Go's creds_utils) ----------------
+
+    namespace {
+        // Go: `\s*(?:(?:[-]{3,}.*[-]{3,}\r?\n)([\w\-.=]+)(?:\r?\n[-]{3,}.*[-]{3,}\r?\n))`
+        // ECMAScript '.' does not match '\n', same as Go's — verified against
+        // the Go library on shared fixtures, not assumed.
+        const std::regex& credsBlockRe() {
+            static const std::regex re(
+                R"(\s*(?:(?:[-]{3,}.*[-]{3,}
+?
+)([\w\-.=]+)(?:
+?
+[-]{3,}.*[-]{3,}
+?
+)))");
+            return re;
+        }
+
+        std::vector<std::string> credsBlocks(std::string_view contents) {
+            std::vector<std::string> out;
+            std::cregex_iterator it(contents.data(), contents.data() + contents.size(), credsBlockRe());
+            for (std::cregex_iterator end; it != end; ++it) {
+                out.emplace_back((*it)[1].str());
+            }
+            return out;
+        }
+
+        std::string_view trimView(std::string_view v) {
+            const auto isws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+            while (!v.empty() && isws(v.front())) v.remove_prefix(1);
+            while (!v.empty() && isws(v.back())) v.remove_suffix(1);
+            return v;
+        }
+
+        bool startsWithSeedType(std::string_view v) {
+            return v.substr(0, 2) == "SO" || v.substr(0, 2) == "SA" || v.substr(0, 2) == "SU";
+        }
+    } // namespace
+
+    std::string ParseDecoratedJWT(std::string_view contents) {
+        auto blocks = credsBlocks(contents);
+        if (blocks.empty()) {
+            // No armor: Go returns the content unmodified, byte-exact.
+            return std::string(contents);
+        }
+        std::string jwt(trimView(blocks[0]));
+        for (auto& b : blocks) secureZero({reinterpret_cast<std::uint8_t*>(b.data()), b.size()});
+        return jwt;
+    }
+
+    std::unique_ptr<KeyPair> ParseDecoratedNKey(std::string_view contents) {
+        std::string seedLine;
+        auto blocks = credsBlocks(contents);
+        if (blocks.size() > 1) {
+            seedLine = blocks[1];
+        } else {
+            // Go's line-scan, quirk included: the TRIMMED line is tested for
+            // the seed prefix, but the RAW line is kept — so an indented seed
+            // fails the final prefix check below, exactly as Go errors.
+            std::string_view rest = contents;
+            while (!rest.empty()) {
+                const auto nl = rest.find('\n');
+                std::string_view line = rest.substr(0, nl);
+                if (startsWithSeedType(trimView(line))) {
+                    seedLine = std::string(line);
+                    break;
+                }
+                if (nl == std::string_view::npos) break;
+                rest.remove_prefix(nl + 1);
+            }
+        }
+        for (auto& b : blocks) secureZero({reinterpret_cast<std::uint8_t*>(b.data()), b.size()});
+        const auto wipeLine = [&seedLine]() {
+            secureZero({reinterpret_cast<std::uint8_t*>(seedLine.data()), seedLine.size()});
+        };
+        if (seedLine.empty())
+            throw std::invalid_argument("no nkey seed found");
+        if (!startsWithSeedType(seedLine)) {
+            wipeLine();
+            throw std::invalid_argument("doesn't contain a valid nkey seed");
+        }
+        try {
+            auto kp = FromSeed(seedLine);
+            wipeLine();
+            return kp;
+        } catch (...) {
+            wipeLine();
+            throw;
+        }
+    }
+
+    std::unique_ptr<KeyPair> ParseDecoratedUserNKey(std::string_view contents) {
+        auto kp = ParseDecoratedNKey(contents);
+        if (kp->prefix() != Prefix::User)
+            throw std::invalid_argument("doesn't contain a user seed nkey");
+        return kp;
     }
 
     // ---------------- Validators (Go's IsValidPublic*Key family) ----------------

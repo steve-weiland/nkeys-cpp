@@ -104,6 +104,26 @@ namespace nkeys {
     /// Decodes a Base32-encoded public key string and creates a Public instance.
     std::unique_ptr<Public>  FromPublicKey(std::string_view b32);
 
+    /// Decorated credentials (.creds) parsing — ports of Go's creds_utils.
+    /// A .creds file carries an armored JWT block and an armored NKey seed
+    /// block ("-----BEGIN …-----" fences). All behaviors below are measured
+    /// against the Go implementation, including its quirks.
+
+    /// Returns the JWT from a decorated creds file. Content with no armor
+    /// blocks is returned UNMODIFIED (byte-exact, trailing newline and all —
+    /// Go's behavior for bare JWT files).
+    std::string ParseDecoratedJWT(std::string_view contents);
+
+    /// Finds the NKey seed in a decorated creds file (second armored block),
+    /// or falls back to scanning lines for an SO/SA/SU seed, and returns the
+    /// key pair. Throws std::invalid_argument when no seed is found or the
+    /// candidate is not a valid operator/account/user seed. Matches Go's
+    /// line-scan quirk: an indented unarmored seed line is an error.
+    std::unique_ptr<KeyPair> ParseDecoratedNKey(std::string_view contents);
+
+    /// ParseDecoratedNKey restricted to USER seeds — anything else throws.
+    std::unique_ptr<KeyPair> ParseDecoratedUserNKey(std::string_view contents);
+
     /// Fills the output span with cryptographically secure random bytes.
     /// Uses platform-specific secure RNG (arc4random_buf, /dev/urandom).
     /// Throws std::runtime_error if secure RNG is unavailable.

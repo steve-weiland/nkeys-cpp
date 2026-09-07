@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <fstream>
 #include <algorithm>
 #include <random>
 #include <regex>
@@ -507,4 +508,57 @@ TEST(NKeysTest, PublicKeyValidators) {
     EXPECT_FALSE(nkeys::IsValidPublicUserKey("not a key"));
     EXPECT_FALSE(nkeys::IsValidPublicKey(upub.substr(0, 40)));
     EXPECT_FALSE(nkeys::IsValidPublicKey(""));
+}
+
+// ---- M2: decorated creds parsing (all expectations MEASURED from Go) ----
+
+namespace {
+std::string readFixture(const char* name) {
+    std::ifstream f(std::string("tests/fixtures/") + name, std::ios::binary);
+    if (!f) f.open(std::string("../tests/fixtures/") + name, std::ios::binary);
+    EXPECT_TRUE(f.is_open()) << "fixture " << name;
+    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+constexpr const char* kFixtureJwt =
+    "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJVRFJWU1BWUlBCQUdNVkEyR1dMQVZNUFNDNEJYV0xOSVk3UkdFVkFTR09aUklRMlVWUURJTU5EWiJ9.ZmFrZS1zaWduYXR1cmU";
+constexpr const char* kFixturePub =
+    "UDRVSPVRPBAGMVA2GWLAVMPSC4BXWLNIY7RGEVASGOZRIQ2UVQDIMNDZ";
+} // namespace
+
+TEST(CredsTest, ParsesJwtAndNKeyFromArmoredCreds) {
+    const auto creds = readFixture("user.creds");
+    EXPECT_EQ(nkeys::ParseDecoratedJWT(creds), kFixtureJwt);
+    EXPECT_EQ(nkeys::ParseDecoratedNKey(creds)->publicString(), kFixturePub);
+    EXPECT_EQ(nkeys::ParseDecoratedUserNKey(creds)->publicString(), kFixturePub);
+}
+
+TEST(CredsTest, UserNKeyRejectsAccountCreds) {
+    const auto creds = readFixture("account.creds");
+    EXPECT_EQ(nkeys::ParseDecoratedNKey(creds)->prefix(), nkeys::Prefix::Account);
+    EXPECT_THROW((void)nkeys::ParseDecoratedUserNKey(creds), std::invalid_argument);
+}
+
+// Measured: Go returns non-armored content UNMODIFIED — trailing newline and all.
+TEST(CredsTest, BareJwtPassesThroughByteExact) {
+    EXPECT_EQ(nkeys::ParseDecoratedJWT("just-a-bare.jwt.token\n"), "just-a-bare.jwt.token\n");
+}
+
+TEST(CredsTest, UnarmoredSeedFileLineScan) {
+    const std::string contents =
+        std::string("# comment\n") + "SUAKL3QNZFVCJTFW6O4IGGAEHCPVVCENDP2JCNCN3KKUEXDCKKZDRMKTLE\n";
+    EXPECT_EQ(nkeys::ParseDecoratedNKey(contents)->publicString(), kFixturePub);
+}
+
+// Measured Go quirk, matched deliberately: the line-scan tests the TRIMMED
+// line for the SO/SA/SU prefix but keeps the RAW line, whose leading
+// whitespace then fails the final prefix check — an indented unarmored seed
+// errors in Go, so it errors here.
+TEST(CredsTest, IndentedUnarmoredSeedErrorsLikeGo) {
+    const std::string contents =
+        std::string("  SUAKL3QNZFVCJTFW6O4IGGAEHCPVVCENDP2JCNCN3KKUEXDCKKZDRMKTLE\n");
+    EXPECT_THROW((void)nkeys::ParseDecoratedNKey(contents), std::invalid_argument);
+}
+
+TEST(CredsTest, NoSeedAnywhereThrows) {
+    EXPECT_THROW((void)nkeys::ParseDecoratedNKey("nothing here\n"), std::invalid_argument);
 }
