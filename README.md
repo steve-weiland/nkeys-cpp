@@ -10,6 +10,10 @@ NKeys provides a secure, modern approach to authentication in distributed system
 
 - **Ed25519 Cryptography**: Fast, secure digital signatures using Monocypher
 - **Multiple Key Types**: Support for User, Account, Server, Cluster, and Operator keys
+- **XKeys Encryption**: Curve (x25519) key pairs with NaCl-box `seal`/`open`,
+  byte-compatible with Go's `Seal`/`Open` (verified against live Go ciphertexts)
+- **Decorated Credentials**: `ParseDecoratedJWT` / `ParseDecoratedNKey` /
+  `ParseDecoratedUserNKey` for NATS `.creds` files
 - **Base32 Encoding**: Human-readable key representation with CRC16 validation
 - **Secure Memory Handling**: Automatic wiping of sensitive key material
 - **Cross-Platform**: macOS and Linux (both build- and test-verified); Windows pending a secure-RNG implementation (see SECURITY.md)
@@ -70,6 +74,9 @@ The included `nk++` command-line tool provides key management operations:
 # Generate a new user key
 ./build/nk++ --gen user > user.seed
 
+# Generate a curve (x25519) encryption key pair
+./build/nk++ --gen curve --pubout
+
 # Extract public key from seed
 ./build/nk++ --inkey user.seed --pubout > user.pub
 
@@ -94,11 +101,19 @@ auto server   = nkeys::CreateServer();
 auto cluster  = nkeys::CreateCluster();
 auto oper     = nkeys::CreateOperator(); // ('operator' is a C++ keyword)
 
+// Or create by prefix
+auto kp2 = nkeys::CreatePair(nkeys::Prefix::User);
+
 // Load from seed string
 auto kp = nkeys::FromSeed("SUAAV...");
 
 // Load public key only (for verification)
 auto pub = nkeys::FromPublicKey("UAH4N...");
+
+// Encoded accessors
+kp->seedString();    // "SUAAV..." — the seed (keep secret!)
+kp->publicString();  // "UAH4N..." — the public key
+kp->privateString(); // "PA6X..."  — the raw private key (rarely needed; prefer the seed)
 ```
 
 ### Signing and Verification
@@ -114,6 +129,45 @@ bool valid = kp->verify(msg, signature);
 // Verify with public key only
 auto pub = nkeys::FromPublicKey(kp->publicString());
 bool valid = pub->verify(msg, signature);
+```
+
+### Curve Keys (XKeys) — Encryption
+
+Curve keys encrypt; they don't sign. They are a separate type — where Go's
+single `KeyPair` interface errors at runtime if a curve pair is asked to
+`Sign`, here `FromSeed` rejects `SX…` seeds at the door and `CurveKeyPair`
+simply has no `sign`.
+
+```cpp
+auto alice = nkeys::CreateCurveKeys();          // seed "SX…", public "X…"
+auto bob   = nkeys::FromCurveSeed("SXAHRV...");
+
+// NaCl box, wire-compatible with Go: "xkv1" || nonce || tag || ciphertext
+std::vector<uint8_t> msg = {'h', 'i'};
+auto sealed = alice->seal(msg, bob->publicString());     // random nonce
+auto opened = bob->open(sealed, alice->publicString());  // throws if tampered
+```
+
+`sealWithNonce()` exists for deterministic test vectors (Go's `SealWithRand`)
+— never reuse a nonce for real traffic.
+
+### Decorated Credentials (.creds files)
+
+```cpp
+std::string creds = /* contents of a NATS .creds file */;
+std::string jwt = nkeys::ParseDecoratedJWT(creds);       // first armored block (or bare JWT)
+auto kp  = nkeys::ParseDecoratedNKey(creds);             // the seed inside
+auto ukp = nkeys::ParseDecoratedUserNKey(creds);         // same, but must be a user seed
+```
+
+The parsed seed is wiped from intermediate buffers on every path; quirks match
+Go (an indented bare seed line is NOT found, exactly as in the Go parser).
+
+### Validation Helpers
+
+```cpp
+nkeys::IsValidPublicKey(s);         // any public type
+nkeys::IsValidPublicUserKey(s);     // plus Account/Server/Cluster/Operator/Curve variants
 ```
 
 ### Memory Security
@@ -184,6 +238,9 @@ ctest --test-dir build
 Test suite covers:
 - All public API operations, encoding/decoding, and error paths
 - Cryptographic correctness, including Go-measured decoder strictness
+- Golden vectors produced by the live Go library — including byte-identical
+  fixed-nonce `seal` ciphertexts (see `tests/interop/` for the Go probe that
+  generated them and can re-verify against a Go checkout)
 - Security-focused cases (cross-type verification, bit flips, tampering,
   use-after-wipe, malformed signatures, public-key-as-seed rejection)
 - Memory wiping verification
@@ -294,8 +351,9 @@ nkeys-cpp/
 ├── tests/                 # Test suite
 │   ├── nkeys_test.cpp     # Library tests
 │   ├── cmd_args_test.cpp  # Tool tests
-│   └── fixtures/          # Test data
-├── external/monocypher/   # Ed25519 implementation
+│   ├── fixtures/          # Test data
+│   └── interop/           # Go probe: source of all golden vectors
+├── external/monocypher/   # Ed25519 / X25519 / Poly1305 primitives
 ├── CMakeLists.txt         # Build configuration
 └── README.md              # This file
 ```
@@ -314,5 +372,6 @@ BSD-2-Clause option (dual CC0/BSD-2); see [NOTICE](NOTICE).
 ## Acknowledgments
 
 - [NATS.io](https://nats.io/) for the original NKeys specification and Go implementation
-- [Monocypher](https://monocypher.org/) for the Ed25519 cryptographic implementation
+- [Monocypher](https://monocypher.org/) for the Ed25519, X25519, and Poly1305 primitives
+  (the Salsa20 core needed for NaCl-box compatibility is vendored in `src/nkeys.cpp`)
 - [GoogleTest](https://github.com/google/googletest) for the testing framework

@@ -6,10 +6,12 @@ code in this repository.
 ## Project Overview
 
 nkeys-cpp is a C++20 port of the Go [NATS nkeys](https://github.com/nats-io/nkeys)
-cryptographic key system: Ed25519 key generation, signing, and verification with
+cryptographic key system: Ed25519 key generation, signing, and verification,
+x25519 XKeys with NaCl-box seal/open, and decorated-creds parsing, all with
 NATS's Base32 + CRC-16 key serialization. Wire/format compatibility with the Go
-implementation is the defining requirement — it has been verified live in both
-directions (Go-signed → C++-verified and back, plus seed→pubkey golden vectors).
+implementation is the defining requirement — verified live in both directions
+(sign/verify and seal/open each way, byte-identical fixed-nonce ciphertexts,
+plus seed→pubkey golden vectors).
 
 Monocypher is vendored for the crypto. **It must be the `monocypher-ed25519`
 unit** (SHA-512 Ed25519, RFC 8032); Monocypher's default EdDSA uses BLAKE2b and
@@ -60,9 +62,10 @@ docker run --rm -v "$PWD":/src:ro alpine:3.20 sh -c \
    cmake --build b -j >/dev/null && ctest --test-dir b'
 ```
 
-For codec/interop changes, also run the Go cross-check (a ~40-line probe using
-a `replace` directive to a local nkeys checkout): seed→pubkey both ways, and
-signature verification in both directions.
+For codec/interop changes, also run the Go cross-check — the probe is checked
+in at `tests/interop/` (pinned to upstream nkeys; add a `replace` directive to
+probe a local checkout): seed→pubkey both ways, signature verification in both
+directions, and seal/open in both directions for curve changes.
 
 ## Working discipline
 
@@ -81,23 +84,36 @@ signature verification in both directions.
   key TYPE and `isSeed` distinguishes it from a same-type public key.
 - `src/nkeys.cpp` — impls, Base32 (RFC 4648 alphabet, no padding, Go-measured
   strictness), CRC-16/XMODEM appended little-endian, seed 2-byte prefix
-  packing (bit-identical to Go's EncodeSeed), platform RNG.
+  packing (bit-identical to Go's EncodeSeed), platform RNG. Also the vendored
+  Salsa20 core (`namespace salsa`) — Monocypher is ChaCha-family and cannot do
+  XSalsa20, so NaCl-box seal/open composes Monocypher's X25519 + Poly1305 with
+  this core; it is validated byte-for-byte against Go ciphertexts, and only the
+  Go-golden tests can catch a self-consistent wrong cipher (a broken core still
+  round-trips with itself).
+- `CurveKeyPair` is a separate type from `KeyPair` (Go dispatches at runtime;
+  we use the type system): `FromSeed` refuses 'SX…', `FromCurveSeed` refuses
+  signing seeds, `isPublicPrefix` deliberately EXCLUDES Curve so an x25519 key
+  can never reach Ed25519 verify — while codec seed paths accept Curve as
+  seedable. Curve `privateString()` encodes the 32-byte seed (Go quirk).
 - `secureRandomBytes()`: `arc4random_buf` (macOS/BSD); `getrandom(2)` on Linux
   with `/dev/urandom` fallback (feof checked BEFORE fclose); anything else
   throws — there is deliberately NO `std::random_device` fallback (it is not
   guaranteed to be a CSPRNG). Windows backend not yet implemented: key
   generation throws there.
-- `src/tools/nk-main.cpp` — `nk++` CLI (no x25519/vanity, unlike Go's nk);
-  signatures are base64 RawURL, matching Go's tool. Key files may contain
-  comments; first valid 56/58-char key wins.
+- `src/tools/nk-main.cpp` — `nk++` CLI (`--gen curve` supported; no vanity
+  search, unlike Go's nk); signatures are base64 RawURL, matching Go's tool.
+  Key files may contain comments; first valid 56/58-char key wins.
 
-## Known gaps (vs the Go library)
+## Known gaps
 
-XKeys (x25519 seal/open, 'X' prefix), decorated-creds parsing
-(`ParseDecoratedJWT`/`ParseDecoratedNKey`), `PrivateKey()` accessor, public
-`CreatePair(Prefix)`, `IsValidPublic*Key` helpers, CMake package config
-(`find_package(nkeys)`), CI. See the README roadmap before starting any of
-these — and port behavior from the Go source, verified by the probe.
+Feature parity with the Go library is complete (XKeys, decorated creds,
+`privateString`, `CreatePair`, validators — all landed 2026-09, Go-probe
+gated). Remaining are usability gaps, not parity gaps: CMake package config
+(`find_package(nkeys)`), CI (the macOS + Linux + probe gates above, automated),
+`BUILD_SHARED_LIBS`, a typed error taxonomy (everything throws
+`std::invalid_argument`/`logic_error` today), and the Windows RNG backend.
+Port behavior from the Go source, verified by the probe, for anything that
+touches the wire.
 
 ## When review catches you violating a convention
 
