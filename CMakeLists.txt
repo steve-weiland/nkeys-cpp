@@ -111,7 +111,12 @@ if (BUILD_TESTING)
     find_package(Threads REQUIRED)
 
     set(_have_gtest FALSE)
-    if (NKEYS_USE_SYSTEM_GTEST)
+    # Sanitizer builds must NOT link a system (uninstrumented) GTest: libc++'s
+    # ASAN container annotations disagree with uninstrumented code touching the
+    # same containers, and GTest's own argv setup then reports a bogus
+    # container-overflow before a single test runs (seen live on macOS/Homebrew).
+    # Fetch and instrument GTest alongside the code instead.
+    if (NKEYS_USE_SYSTEM_GTEST AND NOT (NKEYS_ENABLE_ASAN OR NKEYS_ENABLE_UBSAN))
         find_package(GTest QUIET)
         if (GTest_FOUND)
             set(_have_gtest TRUE)
@@ -138,6 +143,10 @@ if (BUILD_TESTING)
     endif()
 
     add_executable(nkeys_test tests/nkeys_test.cpp)
+    # Absolute fixtures path so out-of-tree builds (CI, sanitizer dirs) find
+    # them — CWD-relative lookup only worked for build dirs inside the repo.
+    target_compile_definitions(nkeys_test PRIVATE
+            NKEYS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     target_link_libraries(nkeys_test PRIVATE nkeys ${GTEST_LIBS} Threads::Threads)
     target_include_directories(nkeys_test PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -154,6 +163,12 @@ if (BUILD_TESTING)
     include(GoogleTest)
     gtest_discover_tests(nkeys_test)
     gtest_discover_tests(cmd_args_test)
+
+    # Interop driver: the C++ half of tests/interop/run.sh (the live Go↔C++
+    # matrix). Built with tests; the matrix itself needs a Go toolchain and
+    # runs via the script / CI interop job, not ctest.
+    add_executable(cpp_driver tests/interop/cpp_driver.cpp)
+    target_link_libraries(cpp_driver PRIVATE nkeys)
 endif()
 
 # --- Install targets -------------------------------------------------------

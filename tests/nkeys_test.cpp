@@ -514,8 +514,7 @@ TEST(NKeysTest, PublicKeyValidators) {
 
 namespace {
 std::string readFixture(const char* name) {
-    std::ifstream f(std::string("tests/fixtures/") + name, std::ios::binary);
-    if (!f) f.open(std::string("../tests/fixtures/") + name, std::ios::binary);
+    std::ifstream f(std::string(NKEYS_TEST_FIXTURES_DIR "/") + name, std::ios::binary);
     EXPECT_TRUE(f.is_open()) << "fixture " << name;
     return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
 }
