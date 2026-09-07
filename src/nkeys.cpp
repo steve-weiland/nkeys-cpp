@@ -17,6 +17,7 @@
 
 extern "C" {
 #include <monocypher/monocypher-ed25519.h>
+#include <monocypher/monocypher.h> // crypto_x25519_public_key for curve keys
 }
 
 namespace nkeys {
@@ -288,6 +289,8 @@ namespace nkeys {
         // A public key of the right type also carries a 32-byte payload — only
         // the 'S…' seed form may reach key derivation (Go: "nkeys: invalid seed").
         if (!decoded.isSeed) throw std::invalid_argument("Invalid seed: not a seed string (expected 'S' prefix)");
+        if (decoded.prefix == Prefix::Curve)
+            throw std::invalid_argument("Curve ('SX…') seed: use FromCurveSeed — curve pairs encrypt, they don't sign");
         const auto& prefix = decoded.prefix;
         auto& payload = decoded.payload;
         if (payload.size() != ED25519_SEED_SIZE) throw std::invalid_argument("Invalid seed: must be 32 bytes");
@@ -322,6 +325,67 @@ namespace nkeys {
         std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE> pk{};
         std::copy_n(payload.begin(), ED25519_PUBLIC_KEY_SIZE, pk.begin());
         return std::make_unique<PublicImpl>(pk, prefix);
+    }
+
+    // ---------------- Curve (x25519) key pairs ----------------
+
+    class CurveKeyPairImpl final : public CurveKeyPair {
+    public:
+        explicit CurveKeyPairImpl(const Seed& seed) : seed_(seed) {
+            crypto_x25519_public_key(pk_.data(), seed_.data());
+        }
+        ~CurveKeyPairImpl() override {
+            secureZero(seed_);
+            secureZero(pk_);
+        }
+        [[nodiscard]] Prefix prefix() const noexcept override { return Prefix::Curve; }
+        [[nodiscard]] std::string seedString() const override {
+            requireLive();
+            return codec::EncodeSeed(Prefix::Curve, seed_);
+        }
+        [[nodiscard]] std::string publicString() const override {
+            requireLive();
+            return codec::Encode(Prefix::Curve, pk_);
+        }
+        [[nodiscard]] std::string privateString() const override {
+            requireLive();
+            // Curve private keys encode the 32-byte seed (Go quirk, matched) —
+            // Ed25519 pairs encode their 64-byte secret key here.
+            return codec::Encode(Prefix::Private, seed_);
+        }
+        void wipe() override {
+            secureZero(seed_);
+            secureZero(pk_);
+            wiped_ = true;
+        }
+
+    private:
+        void requireLive() const {
+            if (wiped_) throw std::logic_error("curve key pair has been wiped");
+        }
+        Seed      seed_{};
+        PublicKey pk_{};
+        bool      wiped_{false};
+    };
+
+    std::unique_ptr<CurveKeyPair> CreateCurveKeys() {
+        CurveKeyPair::Seed seed{};
+        SecureGuard<CurveKeyPair::Seed> guard(seed);
+        secureRandomBytes(seed);
+        return std::make_unique<CurveKeyPairImpl>(seed);
+    }
+
+    std::unique_ptr<CurveKeyPair> FromCurveSeed(std::string_view b32) {
+        auto decoded = codec::Decode(b32);
+        if (!decoded.isSeed || decoded.prefix != Prefix::Curve)
+            throw std::invalid_argument("Invalid curve seed: expected an 'SX…' seed string");
+        if (decoded.payload.size() != ED25519_SEED_SIZE)
+            throw std::invalid_argument("Invalid curve seed: must be 32 bytes");
+        CurveKeyPair::Seed seed{};
+        SecureGuard<CurveKeyPair::Seed> guard(seed);
+        std::copy_n(decoded.payload.begin(), ED25519_SEED_SIZE, seed.begin());
+        secureZero(decoded.payload);
+        return std::make_unique<CurveKeyPairImpl>(seed);
     }
 
     // ---------------- Decorated creds parsing (Go's creds_utils) ----------------
@@ -570,8 +634,11 @@ namespace nkeys {
     std::string codec::EncodeSeed(Prefix prefix, std::span<const std::uint8_t> seed32) {
         if (seed32.size() != ED25519_SEED_SIZE)
             throw std::invalid_argument("Invalid seed: must be 32 bytes");
-        if (!isPublicPrefix(prefix))
-            throw std::invalid_argument("Invalid prefix: must be public key type");
+        // Seedable types are the signing publics PLUS Curve ("SX…") — Go's
+        // EncodeSeed accepts curve too. isPublicPrefix stays curve-free on
+        // purpose (Ed25519 verification must never see an X key).
+        if (!isPublicPrefix(prefix) && prefix != Prefix::Curve)
+            throw std::invalid_argument("Invalid prefix: must be a seedable key type");
 
         // We want Base32 chars:
         //   c0 = 'S' (value 18), c1 = public type ('U','A','N','C','O')
@@ -629,8 +696,9 @@ namespace nkeys {
             const auto vT = static_cast<uint8_t>((low3(raw[0]) << 2) | top2(raw[1])); // 0..31
             // Rebuild the public Prefix byte (= vT << 3)
             auto pub = static_cast<Prefix>(static_cast<uint8_t>(vT << 3));
-            // sanity check: only allow known public types
-            if (!isPublicPrefix(pub)) throw std::invalid_argument("Invalid prefix: not a valid public key type");
+            // sanity check: only allow seedable types (signing publics + Curve)
+            if (!isPublicPrefix(pub) && pub != Prefix::Curve)
+                throw std::invalid_argument("Invalid prefix: not a valid seed key type");
             std::vector<std::uint8_t> payload(raw.begin() + 2, raw.begin() + 2 + ED25519_SEED_SIZE);
             return {pub, std::move(payload), /*isSeed=*/true}; // payload = 32B seed
         }

@@ -104,6 +104,37 @@ namespace nkeys {
     /// Decodes a Base32-encoded public key string and creates a Public instance.
     std::unique_ptr<Public>  FromPublicKey(std::string_view b32);
 
+    /// Curve (x25519) key pair — ENCRYPTION keys, deliberately a separate type
+    /// from the Ed25519 signing KeyPair (Go uses one interface whose curve
+    /// pairs error on Sign/Verify at runtime; here the type system says it).
+    /// Encodes as 'X…' public / 'SX…' seed. Seal/Open (NaCl-box compatible)
+    /// arrive with the next milestone.
+    class CurveKeyPair {
+    public:
+        using Seed      = std::array<std::uint8_t, ED25519_SEED_SIZE>;
+        using PublicKey = std::array<std::uint8_t, ED25519_PUBLIC_KEY_SIZE>;
+        virtual ~CurveKeyPair() = default;
+        /// Always Prefix::Curve.
+        [[nodiscard]] virtual Prefix      prefix() const noexcept = 0;
+        /// Base32-encoded seed ("SX…").
+        [[nodiscard]] virtual std::string seedString() const = 0;
+        /// Base32-encoded x25519 public key ("X…").
+        [[nodiscard]] virtual std::string publicString() const = 0;
+        /// Base32-encoded private key ("P…") — encodes the 32-byte curve seed
+        /// (unlike Ed25519 pairs, whose 'P' string holds 64 bytes; Go quirk, matched).
+        [[nodiscard]] virtual std::string privateString() const = 0;
+        /// Zeroes key material and disables the pair (further use throws).
+        virtual void wipe() = 0;
+    };
+
+    /// Creates a new curve (x25519) key pair with a secure random seed.
+    std::unique_ptr<CurveKeyPair> CreateCurveKeys();
+
+    /// Decodes an 'SX…' curve seed string. Rejects signing-key seeds — and
+    /// FromSeed symmetrically rejects curve seeds (typed divergence from Go's
+    /// runtime dispatch, on purpose).
+    std::unique_ptr<CurveKeyPair> FromCurveSeed(std::string_view b32);
+
     /// Decorated credentials (.creds) parsing — ports of Go's creds_utils.
     /// A .creds file carries an armored JWT block and an armored NKey seed
     /// block ("-----BEGIN …-----" fences). All behaviors below are measured
