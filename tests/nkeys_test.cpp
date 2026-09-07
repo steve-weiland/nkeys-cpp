@@ -429,3 +429,38 @@ TEST(NKeysTest, FromRawSeedRejectsNonPublicPrefix) {
     EXPECT_THROW((void)nkeys::FromRawSeed(raw, nkeys::Prefix::Private), std::invalid_argument);
     EXPECT_NO_THROW((void)nkeys::FromRawSeed(raw, nkeys::Prefix::User));
 }
+
+// Decoder strictness must match Go's — MEASURED against the Go library,
+// not assumed: Go rejects lowercase and any '=' (NoPadding), but ACCEPTS
+// non-canonical trailing slack bits (decodes them to the same key). This
+// decoder previously accepted strings Go rejects (lowercase, embedded '='
+// via silent truncation) — mixed-language systems could disagree about the
+// validity of the same credential.
+TEST(NKeysTest, DecodeStrictnessMatchesGo) {
+    const auto kp = nkeys::CreateUser();
+    const std::string pub = kp->publicString();
+
+    // Lowercase: Go errors ("illegal base32 data at input byte 0").
+    std::string lower = pub;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    EXPECT_THROW((void)codec::Decode(lower), std::invalid_argument);
+
+    // '=' anywhere: Go's NoPadding treats it as illegal. The old decoder
+    // BROKE at the first '=' — silently decoding a truncated prefix.
+    EXPECT_THROW((void)codec::Decode(pub + "="), std::invalid_argument);
+
+    // Non-canonical trailing slack bits: Go ACCEPTS these and decodes to
+    // the same key (measured). We deliberately match — stricter would
+    // reject credentials the reference implementation honors.
+    std::string seed = kp->seedString();
+    const std::string alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    const auto idx = alph.find(seed.back());
+    ASSERT_NE(idx, std::string::npos);
+    std::string flipped = seed;
+    flipped.back() = alph[idx ^ 0x01]; // lowest slack bit
+    const auto a = codec::Decode(seed);
+    const auto b = codec::Decode(flipped);
+    EXPECT_EQ(a.payload, b.payload) << "slack-bit variant must decode to the same key, as Go does";
+
+    EXPECT_NO_THROW((void)codec::Decode(pub));
+}

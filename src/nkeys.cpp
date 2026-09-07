@@ -308,9 +308,12 @@ namespace nkeys {
             std::vector<std::uint8_t> out;
             int                       buffer = 0, bitsLeft = 0;
             for (char ch : s) {
-                if (ch == '=')
-                    break; // no padding expected
-                int v = val(std::toupper(static_cast<unsigned char>(ch)));
+                // Strictness measured against Go's decoder: uppercase only
+                // (no tolower leniency), and '=' is illegal — NoPadding means
+                // padding characters don't exist, and the old break-on-'='
+                // silently decoded a truncated prefix. Trailing slack bits,
+                // however, are ACCEPTED: Go decodes them to the same key.
+                int v = val(ch);
                 if (v < 0)
                     throw std::invalid_argument("Invalid Base32 encoding: illegal character");
                 buffer = (buffer << 5) | v;
