@@ -14,6 +14,30 @@ import (
 func main() {
 	mode := os.Args[1]
 	switch mode {
+	case "gen": // key type → seed + public key on two lines
+		var prefix nkeys.PrefixByte
+		switch os.Args[2] {
+		case "user":
+			prefix = nkeys.PrefixByteUser
+		case "account":
+			prefix = nkeys.PrefixByteAccount
+		case "server":
+			prefix = nkeys.PrefixByteServer
+		case "cluster":
+			prefix = nkeys.PrefixByteCluster
+		case "operator":
+			prefix = nkeys.PrefixByteOperator
+		default:
+			must(fmt.Errorf("unknown key type %q", os.Args[2]))
+		}
+		kp, err := nkeys.CreatePair(prefix)
+		must(err)
+		seed, err := kp.Seed()
+		must(err)
+		pub, err := kp.PublicKey()
+		must(err)
+		fmt.Println(string(seed))
+		fmt.Println(pub)
 	case "pub": // seed on argv → print public key
 		kp, err := nkeys.FromSeed([]byte(strings.TrimSpace(os.Args[2])))
 		must(err)

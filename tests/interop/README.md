@@ -6,8 +6,13 @@ golden vectors in the unit tests were produced by these commands, and live
 bidirectional checks (sign/verify, seal/open) run through it during review.
 
 ```sh
-go build -o probe .
+cd probe && go build -o probe .
 ```
+
+`cpp_driver.cpp` (built by CMake alongside the tests) is the C++ mirror of the
+probe, and `run.sh <build-dir>` runs the full live matrix between them — cross
+key derivation, sign/verify and seal/open in both directions, byte-identical
+fixed-nonce ciphertexts, and decorated-creds parity. CI runs it on every push.
 
 | mode | args | prints |
 |---|---|---|
