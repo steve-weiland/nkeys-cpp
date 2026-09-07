@@ -7,7 +7,7 @@ Thank you for your interest in contributing to nkeys-cpp! This document provides
 ### Prerequisites
 
 - C++20 compatible compiler (GCC 10+, Clang 12+, MSVC 19.29+)
-- CMake 3.20 or higher
+- CMake 3.21 or higher
 - Git
 - Basic knowledge of cryptography (helpful but not required)
 
@@ -128,18 +128,20 @@ int x = static_cast<int>(value); // Yes!
 ### Error Handling
 
 **Exception Policy**
-- Use exceptions for error conditions
-- Prefer `std::invalid_argument` for bad input
-- Prefer `std::runtime_error` for runtime failures
+- Throw only the typed errors from `nkeys_errors.hpp` — pick the category:
+  `InvalidKeyError` (bad keys/seeds/encodings), `DecryptionError` (open()
+  failures), `CredsError` (.creds parsing), `RandomnessError` (RNG),
+  `WipedKeyError` (use-after-wipe). Never a bare std exception — callers rely
+  on `catch (nkeys::Error)` seeing everything the library throws.
 - Never throw from destructors or `noexcept` functions
 
 **Error Message Format**
 ```cpp
 // ✅ Good: Descriptive with component and reason
-throw std::invalid_argument("Invalid seed: must be 32 bytes");
+throw InvalidKeyError("Invalid seed: must be 32 bytes");
 
 // ❌ Bad: Vague or abbreviated
-throw std::invalid_argument("bad seed");
+throw InvalidKeyError("bad seed");
 ```
 
 ### Memory Safety

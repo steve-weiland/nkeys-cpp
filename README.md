@@ -357,7 +357,11 @@ int main() {
 ```
 
 All four consumption paths (find_package static + shared, pkg-config,
-add_subdirectory embed) are exercised by `tests/packaging/test.sh` in CI.
+add_subdirectory embed) are exercised by `tests/packaging/test.sh` in CI —
+which also asserts symbol hygiene: `libnkeys` exports **no** `crypto_*`
+symbols (the vendored Monocypher is renamed to an `nkeys__` prefix at build
+time), so linking your own Monocypher alongside nkeys neither collides nor
+silently substitutes one copy for the other.
 
 ### Uninstallation
 

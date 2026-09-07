@@ -7,6 +7,10 @@
 #   3. pkg-config: compile the consumer with `pkg-config --cflags --libs nkeys`
 #   4. add_subdirectory embed: nkeys::nkeys alias resolves, and none of the
 #      top-level-only targets (tests, nk++) leak into the parent project
+#   5. symbol hygiene: libnkeys exports NO unprefixed Monocypher symbols
+#      (static and shared), and a consumer that links its own Monocypher
+#      alongside nkeys still runs correctly — with an unprefixed archive,
+#      link order silently decided which copy of the crypto ran
 #
 # usage: tests/packaging/test.sh   (from anywhere; repo root is derived)
 set -eu
@@ -81,6 +85,36 @@ cmake -S "$WORK/embed" -B "$WORK/embed-b" >/dev/null
 cmake --build "$WORK/embed-b" -j >/dev/null
 [ "$("$WORK/embed-b/consumer")" = "CONSUMER-OK" ] || fail "embedded consumer did not run"
 check "add_subdirectory embed: alias resolves, no test/CLI targets leak"
+
+# 5 ── Monocypher symbol hygiene
+STATIC_LIB="$WORK/prefix-static/lib/libnkeys.a"
+SHARED_LIB=$(ls "$WORK"/prefix-shared/lib*/libnkeys.so "$WORK"/prefix-shared/lib*/libnkeys.dylib 2>/dev/null | head -n 1)
+syms() { nm -gU "$1" 2>/dev/null || nm -g --defined-only "$1" 2>/dev/null; }
+for lib in "$STATIC_LIB" "$SHARED_LIB"; do
+    # positive control first: nm must SEE the prefixed symbols, else the
+    # negative assertion below would pass vacuously on an nm/format failure
+    syms "$lib" | grep -E ' [A-Z] _?nkeys__crypto_' >/dev/null \
+        || fail "nm sanity: no prefixed Monocypher symbols visible in $lib"
+    # any DEFINED unprefixed export fails — data too (crypto_argon2_no_extras
+    # is const data; a text-only check missed it and the coexistence link
+    # collided)
+    if syms "$lib" | grep -E ' [A-Z] _?crypto_' >/dev/null; then
+        fail "$lib exports unprefixed Monocypher symbols (crypto_*)"
+    fi
+done
+# behavioral half: the consumer links its OWN Monocypher next to nkeys
+cat > "$WORK/own_mc_user.c" <<'EOF'
+#include <monocypher/monocypher.h>
+int use_own_monocypher(void) {
+    unsigned char a[16] = {0}, b[16] = {1};
+    return crypto_verify16(a, a) == 0 && crypto_verify16(a, b) != 0;
+}
+EOF
+cc -c -I "$REPO/external" -I "$REPO/external/monocypher"     "$REPO/external/monocypher/monocypher.c" -o "$WORK/own_mc.o"
+cc -c -I "$REPO/external" "$WORK/own_mc_user.c" -o "$WORK/own_mc_user.o"
+c++ -std=c++20 -I "$WORK/prefix-static/include" "$HERE/consumer/main.cpp"     "$WORK/own_mc_user.o" "$WORK/own_mc.o" "$STATIC_LIB" -o "$WORK/coexist"
+[ "$("$WORK/coexist")" = "CONSUMER-OK" ] || fail "consumer with its own Monocypher did not run"
+check "no Monocypher symbols exported; consumer's own Monocypher coexists"
 
 echo
 echo "PACKAGING PASS ($pass checks)"

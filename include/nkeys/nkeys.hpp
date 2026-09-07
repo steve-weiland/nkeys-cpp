@@ -226,7 +226,7 @@ namespace nkeys {
         };
 
         /// Decodes a Base32-encoded key string, validates CRC16, and returns prefix + payload.
-        /// Throws std::invalid_argument if CRC validation fails or format is invalid.
+        /// Throws InvalidKeyError if CRC validation fails or format is invalid.
         Decoded Decode(std::string_view b32);
     } // namespace codec
 

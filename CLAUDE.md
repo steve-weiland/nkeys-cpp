@@ -125,10 +125,11 @@ Feature parity with the Go library is complete (XKeys, decorated creds,
 `privateString`, `CreatePair`, validators — all landed 2026-09, Go-probe
 gated), CI automates every gate, and the library is consumable four ways
 (find_package static/shared, pkg-config, add_subdirectory embed — all gated by
-`tests/packaging/test.sh`), and every throw is typed (`nkeys::Error`
-hierarchy). Remaining: hiding/documenting the Monocypher symbols exported from
-libnkeys (they collide if a consumer links Monocypher separately), and the
-Windows RNG backend (a build-only MSVC CI leg is possible before that lands).
+`tests/packaging/test.sh`), every throw is typed (`nkeys::Error` hierarchy),
+and libnkeys exports no Monocypher symbols (`src/monocypher_rename.h`,
+force-included; a consumer's own Monocypher coexists — gate check 5).
+Remaining: the Windows RNG backend (a build-only MSVC CI leg is possible
+before that lands; deliberately skipped for now).
 Port behavior from the Go source, verified by the probe, for anything that
 touches the wire.
 

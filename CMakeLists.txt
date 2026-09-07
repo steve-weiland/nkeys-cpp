@@ -114,6 +114,16 @@ target_include_directories(nkeys PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/external
 )
 target_compile_options(nkeys PRIVATE ${NKEYS_WARNING_FLAGS})
+# Force-include the Monocypher symbol renames into every TU of this target
+# (the vendored C files AND nkeys.cpp, so callers and definitions agree).
+# libnkeys then exports nkeys__crypto_* only — a consumer linking their own
+# Monocypher can't collide with ours or silently service our calls. Gated by
+# tests/packaging/test.sh check 5.
+if (MSVC)
+    target_compile_options(nkeys PRIVATE /FI${CMAKE_CURRENT_SOURCE_DIR}/src/monocypher_rename.h)
+else()
+    target_compile_options(nkeys PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/monocypher_rename.h)
+endif()
 
 # --- Executable: nk++ ------------------------------------------------------
 if (NKEYS_BUILD_CLI)
