@@ -57,14 +57,19 @@ namespace nkeys {
         }
 
         [[nodiscard]] std::string seedString() const override {
+            requireLive();
             return codec::EncodeSeed(prefix_, seed_);
         }
 
         [[nodiscard]] std::string publicString() const override {
+            requireLive();
             return codec::Encode(prefix_, pk_);
         }
 
         [[nodiscard]] std::vector<uint8_t> sign(std::span<const uint8_t> msg) const override {
+            // Signing with zeroed key material would return 64 plausible-looking
+            // bytes — a use-after-wipe must be loud, not a silent bad signature.
+            requireLive();
             std::vector<uint8_t> sig(ED25519_SIGNATURE_SIZE);
             crypto_ed25519_sign(sig.data(), sk_.data(), msg.data(), msg.size());
             return sig;
@@ -81,13 +86,19 @@ namespace nkeys {
             secureZero(seed_);
             secureZero(sk_);
             secureZero(pk_);
+            wiped_ = true;
         }
 
     private:
+        void requireLive() const {
+            if (wiped_) throw std::logic_error("key pair has been wiped");
+        }
+
         Seed      seed_{};
         SecretKey sk_{};
         PublicKey pk_{};
         Prefix    prefix_{Prefix::User};
+        bool      wiped_{false};
     };
 
     class PublicImpl final : public Public {
@@ -236,6 +247,9 @@ namespace nkeys {
 
     std::unique_ptr<KeyPair> FromRawSeed(const std::array<std::uint8_t, ED25519_SEED_SIZE>& rawSeed,
                                          Prefix                                             prefix) {
+        // Fail here, at the mistake — not later inside seedString()'s encoder.
+        if (!isPublicPrefix(prefix))
+            throw std::invalid_argument("Invalid prefix: must be a public key type (User, Account, ...)");
         KeyPair::PublicKey pk{};
         KeyPair::SecretKey sk = derive(rawSeed, pk);
         return std::make_unique<KeyPairImpl>(rawSeed, sk, pk, prefix);

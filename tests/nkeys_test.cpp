@@ -406,3 +406,26 @@ TEST(NKeysTest, VerifyReturnsFalseOnMalformedSignature) {
     EXPECT_FALSE(pub->verify(msg, tooShort));
     EXPECT_TRUE(pub->verify(msg, good)) << "well-formed signatures still verify";
 }
+
+// Using a wiped key pair must be an error, not a silent signature from an
+// all-zero secret key. Pre-fix, sign() after wipe() returned 64 plausible
+// bytes derived from zeroed key material.
+TEST(NKeysTest, SignAfterWipeThrows) {
+    auto kp = nkeys::CreateUser();
+    const std::vector<uint8_t> msg = {'x'};
+    kp->wipe();
+    EXPECT_THROW((void)kp->sign(msg), std::logic_error);
+    EXPECT_THROW((void)kp->seedString(), std::logic_error);
+    EXPECT_THROW((void)kp->publicString(), std::logic_error);
+}
+
+// FromRawSeed must reject non-public prefixes up front — pre-fix a
+// Prefix::Seed or Private keypair constructed fine and only exploded later
+// inside seedString()'s encoder, far from the actual mistake.
+TEST(NKeysTest, FromRawSeedRejectsNonPublicPrefix) {
+    std::array<std::uint8_t, nkeys::ED25519_SEED_SIZE> raw{};
+    nkeys::secureRandomBytes(raw);
+    EXPECT_THROW((void)nkeys::FromRawSeed(raw, nkeys::Prefix::Seed), std::invalid_argument);
+    EXPECT_THROW((void)nkeys::FromRawSeed(raw, nkeys::Prefix::Private), std::invalid_argument);
+    EXPECT_NO_THROW((void)nkeys::FromRawSeed(raw, nkeys::Prefix::User));
+}
