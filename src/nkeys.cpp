@@ -75,6 +75,13 @@ namespace nkeys {
             return codec::Encode(prefix_, pk_);
         }
 
+        [[nodiscard]] std::string privateString() const override {
+            requireLive();
+            // The 64-byte secret key (seed‖pubkey) under the 'P' prefix —
+            // byte-identical to Go's PrivateKey() (golden-vector tested).
+            return codec::Encode(Prefix::Private, sk_);
+        }
+
         [[nodiscard]] std::vector<uint8_t> sign(std::span<const uint8_t> msg) const override {
             // Signing with zeroed key material would return 64 plausible-looking
             // bytes — a use-after-wipe must be loud, not a silent bad signature.
@@ -234,6 +241,14 @@ namespace nkeys {
         return std::make_unique<KeyPairImpl>(seed, sk, pk, prefix);
     }
 
+    std::unique_ptr<KeyPair> CreatePair(Prefix prefix) {
+        if (!isPublicPrefix(prefix))
+            throw std::invalid_argument(
+                "Invalid prefix: CreatePair takes a signing key type (User, Account, ...); "
+                "curve pairs have their own factory");
+        return createPair(prefix);
+    }
+
     std::unique_ptr<KeyPair> CreateUser() {
         return createPair(Prefix::User);
     }
@@ -307,6 +322,36 @@ namespace nkeys {
         std::copy_n(payload.begin(), ED25519_PUBLIC_KEY_SIZE, pk.begin());
         return std::make_unique<PublicImpl>(pk, prefix);
     }
+
+    // ---------------- Validators (Go's IsValidPublic*Key family) ----------------
+
+    namespace {
+        bool isValidPublicOfType(std::string_view b32, Prefix want) noexcept {
+            try {
+                const auto d = codec::Decode(b32);
+                if (d.isSeed || d.payload.size() != ED25519_PUBLIC_KEY_SIZE) return false;
+                return d.prefix == want;
+            } catch (...) {
+                return false;
+            }
+        }
+    } // namespace
+
+    bool IsValidPublicKey(std::string_view b32) noexcept {
+        try {
+            const auto d = codec::Decode(b32);
+            return !d.isSeed && d.payload.size() == ED25519_PUBLIC_KEY_SIZE &&
+                   isPublicPrefix(d.prefix);
+        } catch (...) {
+            return false;
+        }
+    }
+    bool IsValidPublicUserKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::User); }
+    bool IsValidPublicAccountKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::Account); }
+    bool IsValidPublicServerKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::Server); }
+    bool IsValidPublicClusterKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::Cluster); }
+    bool IsValidPublicOperatorKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::Operator); }
+    bool IsValidPublicCurveKey(std::string_view b32) noexcept { return isValidPublicOfType(b32, Prefix::Curve); }
 
     // ---------------- Codec ----------------
     namespace {

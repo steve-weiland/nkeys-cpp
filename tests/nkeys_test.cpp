@@ -464,3 +464,47 @@ TEST(NKeysTest, DecodeStrictnessMatchesGo) {
 
     EXPECT_NO_THROW((void)codec::Decode(pub));
 }
+
+// ---- M1: parity accessors (privateString, CreatePair, validators) ----
+
+// Golden interop vector: the Go library's PrivateKey() for fixtures/test.seed.
+// Monocypher's 64-byte secret key is seed‖pubkey — the SAME layout Go encodes
+// — but that is exactly the kind of assumption this repo measures instead of
+// trusting: this string came from running Go's PrivateKey() on the fixture.
+TEST(NKeysTest, PrivateStringMatchesGoGoldenVector) {
+    const auto kp = nkeys::FromSeed(
+        "SUAKL3QNZFVCJTFW6O4IGGAEHCPVVCENDP2JCNCN3KKUEXDCKKZDRMKTLE");
+    EXPECT_EQ(kp->privateString(),
+              "PCS64DOJNISMZNXTXCBRQBBYT5NIRDI36SITITO2SVBFYYSSWI4LDY2ZH2YXQQ"
+              "DGKQNDLFQKWHZBOA33FWUMPYTCKQJDHMYUINKKYBUGVX3Q");
+}
+
+TEST(NKeysTest, CreatePairPublicAndRejectsOthers) {
+    for (auto p : {nkeys::Prefix::User, nkeys::Prefix::Account, nkeys::Prefix::Server,
+                   nkeys::Prefix::Cluster, nkeys::Prefix::Operator}) {
+        const auto kp = nkeys::CreatePair(p);
+        EXPECT_EQ(kp->prefix(), p);
+    }
+    EXPECT_THROW((void)nkeys::CreatePair(nkeys::Prefix::Seed), std::invalid_argument);
+    EXPECT_THROW((void)nkeys::CreatePair(nkeys::Prefix::Private), std::invalid_argument);
+    // Curve pairs are a different type with a different factory (M3).
+    EXPECT_THROW((void)nkeys::CreatePair(nkeys::Prefix::Curve), std::invalid_argument);
+}
+
+TEST(NKeysTest, PublicKeyValidators) {
+    const auto user = nkeys::CreateUser();
+    const auto account = nkeys::CreateAccount();
+    const std::string upub = user->publicString();
+
+    EXPECT_TRUE(nkeys::IsValidPublicKey(upub));
+    EXPECT_TRUE(nkeys::IsValidPublicUserKey(upub));
+    EXPECT_FALSE(nkeys::IsValidPublicAccountKey(upub));
+    EXPECT_TRUE(nkeys::IsValidPublicAccountKey(account->publicString()));
+
+    // Seeds, garbage, and truncation are invalid everywhere — and the
+    // validators are noexcept: they answer, never throw.
+    EXPECT_FALSE(nkeys::IsValidPublicKey(user->seedString()));
+    EXPECT_FALSE(nkeys::IsValidPublicUserKey("not a key"));
+    EXPECT_FALSE(nkeys::IsValidPublicKey(upub.substr(0, 40)));
+    EXPECT_FALSE(nkeys::IsValidPublicKey(""));
+}

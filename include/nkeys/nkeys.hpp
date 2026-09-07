@@ -20,6 +20,8 @@ namespace nkeys {
         Cluster  = 2u << 3,  // 'C' - Cluster key type
         Account  = 0u << 3,  // 'A' - Account key type
         User     = 20u << 3, // 'U' - User key type
+        Curve    = 23u << 3, // 'X' - Curve (x25519) key type — encryption, not signing
+        Unknown  = 25u << 3, // 'Z' - Unknown/invalid prefix sentinel (matches Go)
     };
 
     /// Ed25519 key pair with signing and verification capabilities.
@@ -43,6 +45,9 @@ namespace nkeys {
         [[nodiscard]] virtual std::string      seedString() const = 0;
         /// Returns the Base32-encoded public key string.
         [[nodiscard]] virtual std::string      publicString() const = 0;
+        /// Returns the Base32-encoded private key string (starts with 'P').
+        /// Encodes the full 64-byte Ed25519 secret key, matching Go's PrivateKey().
+        [[nodiscard]] virtual std::string      privateString() const = 0;
         /// Signs a message and returns the 64-byte Ed25519 signature.
         [[nodiscard]] virtual std::vector<uint8_t> sign(std::span<const uint8_t> msg) const = 0;
         /// Verifies a signature against a message. Returns true iff valid.
@@ -65,6 +70,11 @@ namespace nkeys {
     std::unique_ptr<KeyPair> CreateCluster();
     /// Creates a new Operator key pair with cryptographically secure random seed.
     std::unique_ptr<KeyPair> CreateOperator();
+
+    /// Creates a new key pair of the given public type (User, Account, Server,
+    /// Cluster, Operator). Throws std::invalid_argument for any other prefix —
+    /// curve (x25519) pairs are a different type with their own factory.
+    std::unique_ptr<KeyPair> CreatePair(Prefix prefix);
 
     /// Creates a key pair from a raw 32-byte seed and specified prefix type.
     std::unique_ptr<KeyPair> FromRawSeed(const std::array<std::uint8_t, ED25519_SEED_SIZE>& rawSeed,
@@ -99,7 +109,9 @@ namespace nkeys {
     /// Throws std::runtime_error if secure RNG is unavailable.
     void secureRandomBytes(std::span<std::uint8_t> out);
 
-    /// Checks if a prefix represents a public key type (User, Account, Server, Cluster, Operator).
+    /// Checks if a prefix represents an Ed25519 SIGNING public key type
+    /// (User, Account, Server, Cluster, Operator). Deliberately excludes
+    /// Curve: an x25519 key must never reach Ed25519 verification.
     inline bool isPublicPrefix(Prefix p) {
         return p == Prefix::Server || p == Prefix::Operator || p == Prefix::Cluster ||
                p == Prefix::Account || p == Prefix::User;
@@ -109,8 +121,19 @@ namespace nkeys {
     inline bool validPrefix(Prefix p) {
         return p == Prefix::Server || p == Prefix::Operator || p == Prefix::Cluster ||
                p == Prefix::Account || p == Prefix::User ||
-               p == Prefix::Seed || p == Prefix::Private;
+               p == Prefix::Seed || p == Prefix::Private || p == Prefix::Curve;
     }
+
+    /// Validators mirroring Go's IsValidPublic*Key family: true iff the string
+    /// decodes cleanly (CRC-valid, well-formed) to a public key of the given
+    /// type. noexcept — they answer, never throw.
+    bool IsValidPublicKey(std::string_view b32) noexcept;         ///< any signing public type
+    bool IsValidPublicUserKey(std::string_view b32) noexcept;
+    bool IsValidPublicAccountKey(std::string_view b32) noexcept;
+    bool IsValidPublicServerKey(std::string_view b32) noexcept;
+    bool IsValidPublicClusterKey(std::string_view b32) noexcept;
+    bool IsValidPublicOperatorKey(std::string_view b32) noexcept;
+    bool IsValidPublicCurveKey(std::string_view b32) noexcept;    ///< x25519 'X…' key
 
     /// Base32 encoding/decoding with CRC16 validation for NATS keys.
     namespace codec {
