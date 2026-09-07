@@ -214,7 +214,12 @@ namespace nkeys {
     }
 
     std::unique_ptr<KeyPair> FromSeed(std::string_view b32) {
-        const auto [prefix, payload] = codec::Decode(b32);
+        const auto decoded = codec::Decode(b32);
+        // A public key of the right type also carries a 32-byte payload — only
+        // the 'S…' seed form may reach key derivation (Go: "nkeys: invalid seed").
+        if (!decoded.isSeed) throw std::invalid_argument("Invalid seed: not a seed string (expected 'S' prefix)");
+        const auto& prefix = decoded.prefix;
+        const auto& payload = decoded.payload;
         if (payload.size() != ED25519_SEED_SIZE) throw std::invalid_argument("Invalid seed: must be 32 bytes");
 
         std::array<std::uint8_t, ED25519_SEED_SIZE> seed{};
@@ -226,7 +231,12 @@ namespace nkeys {
         if (b32.size() != NKEYS_PUBLIC_KEY_ENCODED_SIZE) {
             throw std::invalid_argument("Invalid encoded key: must be 56 characters");
         }
-        const auto [prefix, payload] = codec::Decode(b32);
+        const auto decoded = codec::Decode(b32);
+        if (decoded.isSeed) {
+            throw std::invalid_argument("Invalid public key: got a seed string");
+        }
+        const auto& prefix = decoded.prefix;
+        const auto& payload = decoded.payload;
         if (payload.size() != ED25519_PUBLIC_KEY_SIZE) {
             throw std::invalid_argument("Invalid public key: must be 32 bytes");
         }
@@ -417,7 +427,7 @@ namespace nkeys {
             // sanity check: only allow known public types
             if (!isPublicPrefix(pub)) throw std::invalid_argument("Invalid prefix: not a valid public key type");
             std::vector<std::uint8_t> payload(raw.begin() + 2, raw.begin() + 2 + ED25519_SEED_SIZE);
-            return {pub, std::move(payload)}; // payload = 32B seed
+            return {pub, std::move(payload), /*isSeed=*/true}; // payload = 32B seed
         }
 
         // 1-byte prefix (public/private)
@@ -427,7 +437,7 @@ namespace nkeys {
             throw std::invalid_argument("Invalid prefix: unknown prefix byte");
         }
         std::vector<std::uint8_t> payload(raw.begin() + 1, raw.begin() + n);
-        return {p, std::move(payload)};
+        return {p, std::move(payload), /*isSeed=*/false};
     }
 
 } // namespace nkeys

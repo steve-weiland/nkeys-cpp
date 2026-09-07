@@ -99,8 +99,9 @@ TEST(NKeysTest, Seed) {
 
     secureRandomBytes(seed);
     auto encoded = codec::EncodeSeed(Prefix::User, seed);
-    auto [pre, raw] = codec::Decode(encoded);
+    auto [pre, raw, isSeed] = codec::Decode(encoded);
     EXPECT_EQ(pre, Prefix::User);
+    EXPECT_TRUE(isSeed) << "an encoded seed must decode AS a seed";
     const std::vector s(seed.begin(), seed.end());
     EXPECT_THAT(s, ContainerEq(raw));
 }
@@ -363,4 +364,22 @@ TEST(NKeysTest, PublicKeyVerificationSecurity) {
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// FromSeed must reject anything that is not an 'S…' seed. Pre-fix,
+// codec::Decode's seed path returned the public TYPE prefix — erasing the
+// fact that the input was a seed — so a 56-char PUBLIC key decoded to a
+// 32-byte payload that passed FromSeed's size check, and the public-key
+// bytes were used as a seed: a brand-new identity minted from a mixed-up
+// .pub file, exit 0, no error anywhere. (Go: "nkeys: invalid seed".)
+TEST(NKeysTest, FromSeedRejectsPublicKeyInput) {
+    const auto kp = nkeys::CreateUser();
+    const std::string pub = kp->publicString();
+    EXPECT_THROW(
+        {
+            auto wrong = nkeys::FromSeed(pub);
+            // Pre-fix this line was reachable and the identity was wrong:
+            ADD_FAILURE() << "FromSeed accepted a public key and derived " << wrong->publicString();
+        },
+        std::invalid_argument);
 }

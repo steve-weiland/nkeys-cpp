@@ -122,8 +122,12 @@ namespace nkeys {
 
         /// Result of decoding a Base32-encoded key.
         struct Decoded {
-            Prefix                    prefix;  ///< Key type prefix
+            Prefix                    prefix;  ///< Key type prefix (for a seed: the KEY TYPE it encodes, e.g. User)
             std::vector<std::uint8_t> payload; ///< Decoded payload (seed or public key)
+            bool                      isSeed = false; ///< True iff the input was an 'S…' seed string.
+            ///< Without this, a decoded seed is indistinguishable from a decoded
+            ///< public key of the same type — the conflation that let FromSeed
+            ///< accept a public key and derive a wrong identity from its bytes.
         };
 
         /// Decodes a Base32-encoded key string, validates CRC16, and returns prefix + payload.
