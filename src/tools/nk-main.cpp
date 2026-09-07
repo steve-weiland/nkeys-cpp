@@ -139,7 +139,8 @@ bool isValidKeyEncoding(std::string_view line) {
     if (line.empty()) return false;
     char first = line[0];
     if (first != 'S' && first != 'U' && first != 'A' &&
-        first != 'N' && first != 'C' && first != 'O' && first != 'P') {
+        first != 'N' && first != 'C' && first != 'O' && first != 'P' &&
+        first != 'X') {
         return false;
     }
 
@@ -178,12 +179,10 @@ nkeys::Prefix prefixForType(const std::string& type) {
     if (lower == "cluster") return nkeys::Prefix::Cluster;
     if (lower == "operator") return nkeys::Prefix::Operator;
 
-    if (lower == "curve" || lower == "x25519") {
-        throw std::runtime_error("Curve/x25519 keys not supported in this implementation");
-    }
+    if (lower == "curve" || lower == "x25519") return nkeys::Prefix::Curve;
 
     throw std::runtime_error("Invalid key type: " + type +
-                            " (must be user, account, server, cluster, or operator)");
+                            " (must be user, account, server, cluster, operator, or curve)");
 }
 
 void handleGenerate(const cmd_args& args) {
@@ -193,6 +192,16 @@ void handleGenerate(const cmd_args& args) {
     }
 
     nkeys::Prefix prefix = prefixForType(*typeOpt);
+
+    if (prefix == nkeys::Prefix::Curve) {
+        auto ckp = nkeys::CreateCurveKeys();
+        std::cout << ckp->seedString() << "\n";
+        if (args.get("pubout")) {
+            std::cout << ckp->publicString() << "\n";
+        }
+        return;
+    }
+
     std::unique_ptr<nkeys::KeyPair> kp;
 
     switch (prefix) {
@@ -229,6 +238,10 @@ void handlePubout(const cmd_args& args) {
     }
 
     std::string seedStr = readKeyFile(*keyFile);
+    if (seedStr.rfind("SX", 0) == 0) {
+        std::cout << nkeys::FromCurveSeed(seedStr)->publicString() << "\n";
+        return;
+    }
     auto kp = nkeys::FromSeed(seedStr);
     std::cout << kp->publicString() << "\n";
 }
@@ -305,7 +318,7 @@ void printUsage() {
 
 Options:
     -v, --v               Show version
-    --gen <type>          Generate key for [user|account|server|cluster|operator]
+    --gen <type>          Generate key for [user|account|server|cluster|operator|curve]
     --sign <file>         Sign <file> with --inkey <keyfile>
     --verify <file>       Verify <file> with --inkey <keyfile> or --pubin <public> and --sigfile <file>
     --inkey <file>        Input key file (seed/private key)
@@ -316,6 +329,9 @@ Options:
 Examples:
     # Generate a new user key pair
     nk++ --gen user
+
+    # Generate a curve (x25519) encryption key pair
+    nk++ --gen curve --pubout
 
     # Generate a user key and save both seed and public key
     nk++ --gen user --pubout > keys.txt
