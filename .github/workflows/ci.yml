@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNKEYS_WARNINGS_AS_ERRORS=ON
       - name: Build
@@ -36,7 +36,7 @@ jobs:
     name: test (alpine musl)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and test on alpine:3.20
         run: |
           docker run --rm -v "$PWD":/src:ro alpine:3.20 sh -c \
@@ -48,7 +48,7 @@ jobs:
     name: ASAN + UBSAN
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -62,10 +62,11 @@ jobs:
     name: Go interop matrix
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: tests/interop/probe/go.mod
+          cache-dependency-path: tests/interop/probe/go.sum
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
