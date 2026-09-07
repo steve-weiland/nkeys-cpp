@@ -118,10 +118,13 @@ container-overflow before any test runs.
 
 Feature parity with the Go library is complete (XKeys, decorated creds,
 `privateString`, `CreatePair`, validators — all landed 2026-09, Go-probe
-gated), and CI automates every gate. Remaining are usability gaps, not parity
-gaps: CMake package config (`find_package(nkeys)`), `BUILD_SHARED_LIBS`, a
-typed error taxonomy (everything throws
-`std::invalid_argument`/`logic_error` today), and the Windows RNG backend.
+gated), CI automates every gate, and the library is consumable four ways
+(find_package static/shared, pkg-config, add_subdirectory embed — all gated by
+`tests/packaging/test.sh`). Remaining: a typed error taxonomy (everything
+throws `std::invalid_argument`/`logic_error` today), hiding/documenting the
+Monocypher symbols exported from libnkeys (they collide if a consumer links
+Monocypher separately), and the Windows RNG backend (a build-only MSVC CI leg
+is possible before that lands).
 Port behavior from the Go source, verified by the probe, for anything that
 touches the wire.
 

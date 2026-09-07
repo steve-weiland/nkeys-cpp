@@ -198,6 +198,13 @@ cmake -B build -DNKEYS_WARNINGS_AS_ERRORS=ON
 
 # Use system GTest instead of fetching
 cmake -B build -DNKEYS_USE_SYSTEM_GTEST=ON
+
+# Shared library instead of static
+cmake -B build -DBUILD_SHARED_LIBS=ON
+
+# Embed-oriented switches (all default ON at the top level, OFF when this
+# project is consumed via add_subdirectory/FetchContent)
+cmake -B build -DNKEYS_BUILD_TESTS=OFF -DNKEYS_BUILD_CLI=OFF -DNKEYS_INSTALL=OFF
 ```
 
 ### Build Types
@@ -251,51 +258,63 @@ Test suite covers:
 
 ### Install from Source
 
-After building the project, install it to your system:
+Set the prefix at configure time (so the generated pkg-config file carries the
+real install location), then build and install:
 
 ```bash
-# Default installation (to /usr/local/)
+# Default prefix (/usr/local) — sudo for the install step
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 sudo cmake --install build
 
-# Custom installation prefix
-cmake --install build --prefix /custom/path
-```
-
-**Default Installation Locations:**
-- Headers: `/usr/local/include/nkeys/`
-- Library: `/usr/local/lib/libnkeys.a`
-- Executable: `/usr/local/bin/nk++`
-
-**Custom Prefix Installation:**
-
-To install to a custom location, configure with `CMAKE_INSTALL_PREFIX`:
-
-```bash
+# Custom prefix
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/nkeys
 cmake --build build
 cmake --install build
 ```
 
-This installs to:
-- Headers: `/opt/nkeys/include/nkeys/`
-- Library: `/opt/nkeys/lib/libnkeys.a`
-- Executable: `/opt/nkeys/bin/nk++`
+This installs headers (`include/nkeys/`), the library (`lib/libnkeys.a`, or
+`.so`/`.dylib` with `-DBUILD_SHARED_LIBS=ON`), the `nk++` binary, the CMake
+package files (`lib/cmake/nkeys/`), and a pkg-config file (`lib/pkgconfig/`).
 
 ### Using the Installed Library
 
-After installation, use nkeys-cpp in your CMake projects:
+**CMake (`find_package`)** — the intended path:
 
 ```cmake
-# Your project's CMakeLists.txt
-cmake_minimum_required(VERSION 3.20)
-project(my_project)
+cmake_minimum_required(VERSION 3.21)
+project(my_project CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+find_package(nkeys 1.0 CONFIG REQUIRED)
 
-# Find and link nkeys
 add_executable(my_app main.cpp)
-target_include_directories(my_app PRIVATE /usr/local/include)
-target_link_libraries(my_app PRIVATE /usr/local/lib/libnkeys.a)
+target_link_libraries(my_app PRIVATE nkeys::nkeys)
+```
+
+The `nkeys::nkeys` target carries the include paths and the C++20 requirement;
+no manual paths or `CMAKE_CXX_STANDARD` needed. For a non-default prefix, point
+CMake at it: `cmake -B build -DCMAKE_PREFIX_PATH=/opt/nkeys`.
+
+**Embedding (`add_subdirectory` / `FetchContent`)** — no install required:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(nkeys
+    GIT_REPOSITORY https://github.com/steve-weiland/nkeys-cpp.git
+    GIT_TAG v1.0.0)
+FetchContent_MakeAvailable(nkeys)
+
+target_link_libraries(my_app PRIVATE nkeys::nkeys)
+```
+
+Embedded builds get only the library: tests, `nk++`, and install rules are
+top-level-only by default (`NKEYS_BUILD_TESTS` / `NKEYS_BUILD_CLI` /
+`NKEYS_INSTALL`).
+
+**pkg-config** — for non-CMake builds:
+
+```bash
+g++ -std=c++20 my_app.cpp $(pkg-config --cflags --libs nkeys) -o my_app
 ```
 
 **In your code:**
@@ -308,11 +327,8 @@ int main() {
 }
 ```
 
-**Note:** Alternatively, add the install prefix to your compiler search paths:
-```bash
-# Compile with installed library
-g++ -std=c++20 my_app.cpp -I/usr/local/include -L/usr/local/lib -lnkeys -o my_app
-```
+All four consumption paths (find_package static + shared, pkg-config,
+add_subdirectory embed) are exercised by `tests/packaging/test.sh` in CI.
 
 ### Uninstallation
 
@@ -323,9 +339,8 @@ CMake doesn't provide a built-in uninstall target. To remove installed files:
 cat install_manifest.txt | xargs rm
 
 # Or manually remove:
-sudo rm -rf /usr/local/include/nkeys
-sudo rm /usr/local/lib/libnkeys.a
-sudo rm /usr/local/bin/nk++
+sudo rm -rf /usr/local/include/nkeys /usr/local/lib/cmake/nkeys
+sudo rm /usr/local/lib/libnkeys.a /usr/local/lib/pkgconfig/nkeys.pc /usr/local/bin/nk++
 ```
 
 ## Requirements
@@ -335,7 +350,7 @@ sudo rm /usr/local/bin/nk++
   - Clang 12+ (build/test-verified on Apple Clang)
   - MSVC 19.29+ should compile, but key **generation** throws until a
     Windows secure-RNG backend lands (contributions welcome)
-- **CMake**: 3.20 or higher
+- **CMake**: 3.21 or higher
 - **Dependencies**: None (Monocypher included, GoogleTest auto-fetched for tests)
 
 ## Project Structure
@@ -350,12 +365,14 @@ nkeys-cpp/
 │   └── tools/             # Command-line tools
 │       ├── nk-main.cpp    # CLI tool
 │       └── cmd_args.hpp   # Argument parser
+├── cmake/                 # Package-config + pkg-config templates
 ├── tests/                 # Test suite
 │   ├── nkeys_test.cpp     # Library tests
 │   ├── cmd_args_test.cpp  # Tool tests
 │   ├── fixtures/          # Test data
-│   └── interop/           # Live Go↔C++ matrix (run.sh) + the Go probe
-│                          #   that produced every golden vector
+│   ├── interop/           # Live Go↔C++ matrix (run.sh) + the Go probe
+│   │                      #   that produced every golden vector
+│   └── packaging/         # Consumability gate: find_package/pkg-config/embed
 ├── external/monocypher/   # Ed25519 / X25519 / Poly1305 primitives
 ├── CMakeLists.txt         # Build configuration
 └── README.md              # This file

@@ -6,6 +6,8 @@
 #   interop     the live Go↔C++ matrix (tests/interop/run.sh): cross key
 #               derivation, sign/verify + seal/open in both directions,
 #               byte-identical fixed-nonce ciphertexts, decorated-creds parity
+#   packaging   consumability gate (tests/packaging/test.sh): find_package
+#               static + shared, pkg-config, add_subdirectory embed hygiene
 name: CI
 
 on:
@@ -57,6 +59,18 @@ jobs:
         run: cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  packaging:
+    name: packaging (find_package, pkg-config, embed)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run packaging gate
+        run: ./tests/packaging/test.sh
 
   interop:
     name: Go interop matrix

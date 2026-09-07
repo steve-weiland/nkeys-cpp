@@ -356,7 +356,7 @@ int main(int argc, char* argv[]) {
 
         // Version
         if (args.get("v")) {
-            std::cout << "nk++ version 0.1.0\n";
+            std::cout << "nk++ version " NKPP_VERSION "\n";
             return 0;
         }
 

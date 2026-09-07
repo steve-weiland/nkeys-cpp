@@ -1,14 +1,20 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.21)  # PROJECT_IS_TOP_LEVEL
 
-# Project
-project(nkeys-cpp LANGUAGES C CXX)
+# Project — the VERSION here is the single source of truth: it feeds the
+# package config version file, the pkg-config file, and nk++ --v.
+project(nkeys-cpp VERSION 1.0.0 LANGUAGES C CXX)
 
 # --- Options ---------------------------------------------------------------
+# Tests, the CLI, and install rules default off when this project is embedded
+# (add_subdirectory / FetchContent) so consumers get just the library target.
 option(NKEYS_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(NKEYS_USE_SYSTEM_GTEST "Prefer system-installed GTest if available" ON)
 option(NKEYS_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(NKEYS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(NKEYS_ENABLE_HARDENING "Enable security hardening flags" ON)
+option(NKEYS_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})
+option(NKEYS_BUILD_CLI "Build the nk++ CLI tool" ${PROJECT_IS_TOP_LEVEL})
+option(NKEYS_INSTALL "Generate install and package-config rules" ${PROJECT_IS_TOP_LEVEL})
 
 # --- Global settings -------------------------------------------------------
 set(CMAKE_CXX_STANDARD 20)
@@ -87,13 +93,21 @@ set(NKEYS_SOURCES
 )
 
 # --- Library: nkeys --------------------------------------------------------
-add_library(nkeys STATIC
+# Static by default; honors BUILD_SHARED_LIBS=ON.
+add_library(nkeys
         ${NKEYS_SOURCES}
         ${MONOCYPHER_SOURCES}
 )
+add_library(nkeys::nkeys ALIAS nkeys)
+set_target_properties(nkeys PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+)
+target_compile_features(nkeys PUBLIC cxx_std_20)
 
 target_include_directories(nkeys PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_include_directories(nkeys PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -102,17 +116,22 @@ target_include_directories(nkeys PRIVATE
 target_compile_options(nkeys PRIVATE ${NKEYS_WARNING_FLAGS})
 
 # --- Executable: nk++ ------------------------------------------------------
-add_executable(nk++ src/tools/nk-main.cpp)
-target_compile_options(nk++ PRIVATE ${NKEYS_WARNING_FLAGS})
-target_link_libraries(nk++ PRIVATE nkeys)
-target_include_directories(nk++ PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
-)
+if (NKEYS_BUILD_CLI)
+    add_executable(nk++ src/tools/nk-main.cpp)
+    target_compile_options(nk++ PRIVATE ${NKEYS_WARNING_FLAGS})
+    target_compile_definitions(nk++ PRIVATE NKPP_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(nk++ PRIVATE nkeys)
+    target_include_directories(nk++ PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
+    )
+endif()
 
 # --- Tests: nkeys_test (GoogleTest) ---------------------------------------
-include(CTest)
-if (BUILD_TESTING)
+if (NKEYS_BUILD_TESTS)
+    include(CTest)
+endif()
+if (NKEYS_BUILD_TESTS AND BUILD_TESTING)
     # Threads are needed by GTest on POSIX
     find_package(Threads REQUIRED)
 
@@ -191,22 +210,66 @@ if (BUILD_TESTING)
     target_link_libraries(cpp_driver PRIVATE nkeys)
 endif()
 
-# --- Install targets -------------------------------------------------------
+# --- Install + package config ----------------------------------------------
+if (NKEYS_INSTALL)
+    include(CMakePackageConfigHelpers)
 
-# Install static library
-install(TARGETS nkeys
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+    install(TARGETS nkeys
+            EXPORT nkeysTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
 
-# Install public headers - preserve include/nkeys/ directory structure
-install(FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys_constants.hpp
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nkeys
-)
+    # Public headers - preserve include/nkeys/ directory structure
+    install(FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/nkeys/nkeys_constants.hpp
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nkeys
+    )
 
-# Install CLI tool executable
-install(TARGETS nk++
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+    # find_package(nkeys): namespaced targets + config + version files
+    install(EXPORT nkeysTargets
+            FILE nkeysTargets.cmake
+            NAMESPACE nkeys::
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nkeys
+    )
+    configure_package_config_file(
+            cmake/nkeysConfig.cmake.in
+            ${CMAKE_CURRENT_BINARY_DIR}/nkeysConfig.cmake
+            INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nkeys
+    )
+    write_basic_package_version_file(
+            ${CMAKE_CURRENT_BINARY_DIR}/nkeysConfigVersion.cmake
+            VERSION ${PROJECT_VERSION}
+            COMPATIBILITY SameMajorVersion
+    )
+    install(FILES
+            ${CMAKE_CURRENT_BINARY_DIR}/nkeysConfig.cmake
+            ${CMAKE_CURRENT_BINARY_DIR}/nkeysConfigVersion.cmake
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nkeys
+    )
+
+    # pkg-config for non-CMake consumers (GNUInstallDirs vars may be relative
+    # or absolute; normalize against the prefix)
+    if (IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+        set(PKGCONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+    else()
+        set(PKGCONFIG_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    if (IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+        set(PKGCONFIG_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+    else()
+        set(PKGCONFIG_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+    endif()
+    configure_file(cmake/nkeys.pc.in ${CMAKE_CURRENT_BINARY_DIR}/nkeys.pc @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/nkeys.pc
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+    )
+
+    if (NKEYS_BUILD_CLI)
+        install(TARGETS nk++
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
+endif()
